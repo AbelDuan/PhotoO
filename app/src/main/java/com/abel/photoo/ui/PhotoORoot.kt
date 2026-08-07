@@ -1,0 +1,541 @@
+package com.abel.photoo.ui
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings as AndroidSettings
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Photo
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.abel.photoo.model.AlbumItem
+import com.abel.photoo.ui.components.AlbumPickerSheet
+import com.abel.photoo.ui.components.ConfirmDialog
+import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.TextInputDialog
+import com.abel.photoo.ui.screens.AlbumDetailScreen
+import com.abel.photoo.ui.screens.AlbumsScreen
+import com.abel.photoo.ui.screens.ReviewScreen
+import com.abel.photoo.ui.screens.SettingsScreen
+import com.abel.photoo.ui.screens.SimilarScreen
+import com.abel.photoo.ui.screens.TimelineScreen
+import com.abel.photoo.ui.screens.TrashScreen
+import com.abel.photoo.ui.screens.ViewerScreen
+
+/** 底部四个主 Tab。 */
+private enum class Tab(val label: String, val icon: ImageVector) {
+    TIMELINE("时间线", Icons.Rounded.Photo),
+    ALBUMS("相册", Icons.Rounded.Folder),
+    SIMILAR("相似", Icons.Rounded.ContentCopy),
+    SETTINGS("设置", Icons.Rounded.Settings),
+}
+
+/** 大图查看器的打开参数。存 id 而不是对象，照片被删后列表会自动收缩。 */
+private data class ViewerRequest(val ids: List<Long>, val initialId: Long)
+
+/**
+ * 应用的导航根。
+ *
+ * 页面很少且大量共享同一份状态，用 Navigation 组件反而要为传递 AlbumItem 做序列化，
+ * 所以这里用最直白的状态机：四个 Tab + 若干覆盖层。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PhotoORoot(vm: PhotoOViewModel) {
+
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(hasMediaPermission(context)) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted = hasMediaPermission(context) }
+
+    LaunchedEffect(granted) {
+        if (granted) vm.onPermissionGranted()
+    }
+    // 首次进入直接弹权限框，不让用户先看一屏空白再点一次。
+    LaunchedEffect(Unit) {
+        if (!hasMediaPermission(context)) permissionLauncher.launch(requiredPermissions())
+    }
+
+    if (!granted) {
+        PermissionGate(
+            onRequest = { permissionLauncher.launch(requiredPermissions()) },
+            onOpenSettings = {
+                context.startActivity(
+                    Intent(
+                        AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
+        )
+        return
+    }
+
+    val photos by vm.photos.collectAsStateWithLifecycle()
+    val albums by vm.albums.collectAsStateWithLifecycle()
+    val selection by vm.selection.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val stats by vm.stats.collectAsStateWithLifecycle()
+    val exif by vm.exifCache.collectAsStateWithLifecycle()
+
+    var tab by rememberSaveable { mutableStateOf(Tab.TIMELINE) }
+    var albumDetail by remember { mutableStateOf<AlbumItem?>(null) }
+    var reviewing by rememberSaveable { mutableStateOf(false) }
+    var trashOpen by rememberSaveable { mutableStateOf(false) }
+    var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
+
+    var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
+    var creatingAlbum by remember { mutableStateOf(false) }
+    var confirmTrashSelection by remember { mutableStateOf(false) }
+
+    val snackbar = remember { SnackbarHostState() }
+
+    // 数据层的提示统一走 Snackbar，各界面就不用各自处理了。
+    LaunchedEffect(Unit) {
+        vm.messages.collect { text ->
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(text)
+        }
+    }
+
+    // "启动时继续整理"：等第一批数据到位再判断，否则开屏时 stats 还是 0。
+    var resumeChecked by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(stats.total, settings.resumeReviewOnLaunch) {
+        if (!resumeChecked && settings.resumeReviewOnLaunch && stats.total > 0) {
+            resumeChecked = true
+            if (stats.pending > 0) reviewing = true
+        }
+    }
+
+    // ------------------------------------------------------- 独占式全屏覆盖页
+
+    if (reviewing) {
+        BackHandler { reviewing = false }
+        ReviewScreen(
+            vm = vm,
+            onExit = { reviewing = false },
+            onMoveToAlbum = { pickerTargets = listOf(it.id) },
+        )
+        AlbumPickerHost(vm, albums, pickerTargets, { creatingAlbum = true }) {
+            pickerTargets = null
+        }
+        NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
+        return
+    }
+
+    if (trashOpen) {
+        BackHandler { trashOpen = false }
+        TrashScreen(vm = vm, onBack = { trashOpen = false })
+        return
+    }
+
+    // ---------------------------------------------------------------- 主框架
+
+    val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    Box(Modifier.fillMaxSize()) {
+
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            when (tab) {
+                                Tab.TIMELINE -> "PhotoO"
+                                Tab.ALBUMS -> "相册"
+                                Tab.SIMILAR -> "相似照片"
+                                Tab.SETTINGS -> "设置"
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    actions = {
+                        if (tab != Tab.SETTINGS) {
+                            IconButton(onClick = { trashOpen = true }) {
+                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "回收站")
+                            }
+                            IconButton(onClick = vm::refresh) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                )
+            },
+            bottomBar = {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    Tab.entries.forEach { entry ->
+                        NavigationBarItem(
+                            selected = tab == entry,
+                            onClick = {
+                                if (tab != entry) vm.clearSelection()
+                                tab = entry
+                            },
+                            icon = { Icon(entry.icon, contentDescription = entry.label) },
+                            label = { Text(entry.label) },
+                        )
+                    }
+                }
+            },
+        ) { inner ->
+            when (tab) {
+                Tab.TIMELINE -> TimelineScreen(
+                    vm = vm,
+                    contentPadding = inner,
+                    onOpenPhoto = { photo ->
+                        viewer = ViewerRequest(photos.map { it.id }, photo.id)
+                    },
+                    onStartReview = { reviewing = true },
+                    onOpenSimilar = { tab = Tab.SIMILAR },
+                )
+
+                Tab.ALBUMS -> AlbumsScreen(
+                    vm = vm,
+                    contentPadding = inner,
+                    onOpenAlbum = { albumDetail = it },
+                )
+
+                Tab.SIMILAR -> SimilarScreen(
+                    vm = vm,
+                    contentPadding = inner,
+                    onOpenPhoto = { photo ->
+                        viewer = ViewerRequest(photos.map { it.id }, photo.id)
+                    },
+                )
+
+                Tab.SETTINGS -> SettingsScreen(
+                    vm = vm,
+                    contentPadding = inner,
+                    onOpenTrash = { trashOpen = true },
+                )
+            }
+        }
+
+        // ------------------------------------------------------- 相册详情覆盖层
+
+        albumDetail?.let { opened ->
+            // 相册可能在后台被改名或清空，这里始终取最新的一份。
+            val live = albums.firstOrNull { it.bucketId == opened.bucketId } ?: opened
+            val closeDetail = {
+                vm.clearSelection()
+                albumDetail = null
+            }
+            BackHandler(onBack = closeDetail)
+            AlbumDetailScreen(
+                vm = vm,
+                album = live,
+                onBack = closeDetail,
+                onOpenPhoto = { photo ->
+                    val ids = photos.filter { it.bucketId == live.bucketId }.map { it.id }
+                    viewer = ViewerRequest(ids, photo.id)
+                },
+            )
+        }
+
+        // --------------------------------------------------------- 多选操作条
+        // 放在 Scaffold 外面，这样相册详情页也能共用同一条。
+
+        AnimatedVisibility(
+            visible = selection.isNotEmpty() && viewer == null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            SelectionBar(
+                count = selection.size,
+                onSelectAll = {
+                    val pool = albumDetail
+                        ?.let { a -> photos.filter { it.bucketId == a.bucketId } }
+                        ?: photos
+                    vm.replaceSelection(pool.map { it.id })
+                },
+                onMove = { pickerTargets = selection.toList() },
+                onKeep = { vm.markKept(selection.toList()) },
+                onTrash = { confirmTrashSelection = true },
+                onClear = vm::clearSelection,
+                modifier = Modifier.padding(
+                    bottom = if (albumDetail != null) navBarInset + 12.dp else navBarInset + 92.dp
+                ),
+            )
+        }
+
+        // ----------------------------------------------------------- 大图查看
+
+        viewer?.let { request ->
+            val byId = remember(photos) { photos.associateBy { it.id } }
+            val list = remember(request, photos) { request.ids.mapNotNull { byId[it] } }
+            if (list.isEmpty()) {
+                LaunchedEffect(Unit) { viewer = null }
+            } else {
+                BackHandler { viewer = null }
+                ViewerScreen(
+                    photos = list,
+                    initialId = request.initialId,
+                    exif = exif,
+                    onRequestExif = vm::loadExif,
+                    onClose = { viewer = null },
+                    onTrash = { vm.moveToTrash(listOf(it.id)) },
+                    onToggleFavorite = { vm.toggleFavorite(it.id) },
+                    onMoveToAlbum = { pickerTargets = listOf(it.id) },
+                )
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- 公共弹窗
+
+    AlbumPickerHost(vm, albums, pickerTargets, { creatingAlbum = true }) {
+        pickerTargets = null
+    }
+
+    NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
+
+    if (confirmTrashSelection) {
+        ConfirmDialog(
+            title = "移入回收站",
+            message = "${selection.size} 张照片会从 PhotoO 的图库里隐藏，" +
+                if (settings.alsoSystemTrash) "并同时移入系统回收站。"
+                else "原文件仍在手机上，在回收站里再次删除才会真正删掉。",
+            confirmText = "移入回收站",
+            danger = true,
+            onConfirm = { vm.moveToTrash(selection.toList()) },
+            onDismiss = { confirmTrashSelection = false },
+        )
+    }
+}
+
+// ------------------------------------------------------------------ 子组件
+
+/** 相册选择器。归档动作在三处触发（批量、大图、整理），收口到这里避免重复。 */
+@Composable
+private fun AlbumPickerHost(
+    vm: PhotoOViewModel,
+    albums: List<AlbumItem>,
+    targets: List<Long>?,
+    onCreateNew: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (targets.isNullOrEmpty()) return
+    AlbumPickerSheet(
+        albums = albums,
+        photoCount = targets.size,
+        onPick = { album ->
+            vm.moveToAlbum(targets, album)
+            onDismiss()
+        },
+        onCreateNew = onCreateNew,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun NewAlbumDialogHost(
+    vm: PhotoOViewModel,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+) {
+    if (!visible) return
+    TextInputDialog(
+        title = "新建相册",
+        label = "相册名称",
+        confirmText = "创建",
+        onConfirm = vm::createAlbum,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun SelectionBar(
+    count: Int,
+    onSelectAll: () -> Unit,
+    onMove: () -> Unit,
+    onKeep: () -> Unit,
+    onTrash: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .padding(horizontal = 12.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(26.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onClear) {
+            Icon(Icons.Rounded.Close, contentDescription = "取消选择")
+        }
+        Text(
+            "$count",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Box(Modifier.weight(1f))
+        BarAction(Icons.Rounded.SelectAll, "全选", onSelectAll)
+        BarAction(Icons.Rounded.FolderOpen, "归档", onMove)
+        BarAction(Icons.Rounded.DoneAll, "已看", onKeep)
+        BarAction(Icons.Rounded.Delete, "删除", onTrash, MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun BarAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .width(62.dp)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        IconButton(onClick = onClick, modifier = Modifier.size(30.dp)) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(21.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+// ------------------------------------------------------------------ 权限
+
+private fun requiredPermissions(): Array<String> = buildList {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        add(Manifest.permission.READ_MEDIA_IMAGES)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        }
+    } else {
+        add(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+    add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+}.toTypedArray()
+
+private fun hasMediaPermission(context: Context): Boolean {
+    val key = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    if (ContextCompat.checkSelfPermission(context, key) == PackageManager.PERMISSION_GRANTED) {
+        return true
+    }
+    // Android 14 起用户可以只授权"选中的照片"：上面那个权限是拒绝态，
+    // 但 READ_MEDIA_VISUAL_USER_SELECTED 被授予，依然能读到部分图片。
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+    return false
+}
+
+/** 没权限时的引导页。 */
+@Composable
+private fun PermissionGate(
+    onRequest: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.navigationBars),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(
+                Icons.Rounded.PhotoLibrary,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(56.dp),
+            )
+            EmptyState(
+                title = "需要相册权限",
+                subtitle = "PhotoO 需要读取本机图片才能显示时间线、识别相似照片。" +
+                    "所有处理都在手机本地完成，不会上传任何内容。",
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onRequest) { Text("授予权限") }
+                OutlinedButton(onClick = onOpenSettings) { Text("去系统设置") }
+            }
+        }
+    }
+}

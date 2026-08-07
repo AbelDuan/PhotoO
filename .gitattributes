@@ -1,0 +1,7 @@
+# 强制 gradlew 以 LF 行尾存储，避免 Windows 检出成 CRLF 后在 Linux/macOS 上执行失败
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+# Gradle wrapper jar 是二进制，禁止文本规范化
+gradle/wrapper/gradle-wrapper.jar binary
+# 其余按内容自动判断文本/二进制
+* text=auto

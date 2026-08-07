@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      仅作为 Activity 启动前的占位主题，真正的配色由 Compose 侧
+      com.abel.photoo.ui.theme.PhotoOTheme 控制（跟随系统深浅色 + 动态取色）。
+    -->
+    <style name="Theme.PhotoO" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/photoo_window_background</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
