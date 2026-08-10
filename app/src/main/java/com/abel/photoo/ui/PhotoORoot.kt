@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,9 +45,11 @@ import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,8 +59,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -156,6 +157,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     val exif by vm.exifCache.collectAsStateWithLifecycle()
     val liveMuted by vm.liveMuted.collectAsStateWithLifecycle()
     val similarGroups by vm.similarGroups.collectAsStateWithLifecycle()
+    val undoEvent by vm.undoEvent.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TIMELINE) }
     var albumDetail by remember { mutableStateOf<AlbumItem?>(null) }
@@ -180,20 +182,13 @@ fun PhotoORoot(vm: PhotoOViewModel) {
         }
     }
 
-    // 删除后弹出"撤销"：用户点撤销就把刚移入回收站的照片放回图库。
+    // 删除后弹一条轻提示；撤销交给右下角悬浮按钮（FAB 常驻显示直到被消费），
+    // 这里不再带"撤销"动作，避免和 FAB 重复。
     LaunchedEffect(Unit) {
         vm.undoEvent.collect { ev ->
             if (ev == null) return@collect
             snackbar.currentSnackbarData?.dismiss()
-            val result = snackbar.showSnackbar(
-                message = "已移入回收站 ${ev.count} 张",
-                actionLabel = "撤销",
-                duration = SnackbarDuration.Short,
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                vm.undoLastTrash()
-            }
-            vm.clearUndoEvent()
+            snackbar.showSnackbar("已移入回收站 ${ev.count} 张")
         }
     }
 
@@ -445,6 +440,9 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onToggleFavorite = { vm.toggleFavorite(it.id) },
                     onMoveToAlbum = { pickerTargets = listOf(it.id) },
                     quickAlbums = settings.quickAlbums,
+                    quickAlbumCovers = remember(albums) {
+                        albums.associate { it.name to it.coverUri }
+                    },
                     onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
                     onCreateQuickAlbum = { photo -> quickCreate = photo },
                     onResolveLiveVideo = { vm.resolveLiveVideo(it) },
@@ -460,6 +458,31 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     liveMuted = liveMuted,
                     onSetLiveMuted = vm::setLiveMuted,
                 )
+            }
+        }
+
+        // 整理操作的悬浮撤销按钮：删除后常驻显示，直到被点击撤销或新的操作覆盖。
+        // 放在 Box 最后一层，所以大图查看器全屏时也能看到并一键找回。
+        AnimatedVisibility(
+            visible = undoEvent != null,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = 18.dp,
+                    // 大图页底部有快捷归入条 + 操作栏，浮钮再往上提一点，避免遮挡。
+                    bottom = if (viewer != null) navBarInset + 168.dp else navBarInset + 96.dp,
+                ),
+        ) {
+            ExtendedFloatingActionButton(
+                onClick = vm::undoLastTrash,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            ) {
+                Icon(Icons.Rounded.Undo, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("撤销 ${undoEvent?.count ?: 0}", fontWeight = FontWeight.SemiBold)
             }
         }
     }

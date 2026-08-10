@@ -1,6 +1,7 @@
 package com.abel.photoo.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,12 +21,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.abel.photoo.model.AlbumItem
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.detectDragSelect
+import com.abel.photoo.ui.components.rememberDragSelectState
 import com.abel.photoo.ui.components.timelineSections
 import com.abel.photoo.ui.util.Format
 
@@ -48,6 +54,8 @@ fun AlbumDetailScreen(
     val sections = remember(members, settings.grouping) {
         Format.buildSections(members, settings.grouping)
     }
+    // 长按拖动连续选择（与时间线一致的交互）。
+    val dragSelect = rememberDragSelectState()
 
     Scaffold(
         topBar = {
@@ -79,42 +87,56 @@ fun AlbumDetailScreen(
             )
         },
     ) { inner ->
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(settings.gridColumns),
-            contentPadding = PaddingValues(
-                start = 10.dp,
-                end = 10.dp,
-                top = inner.calculateTopPadding(),
-                bottom = inner.calculateBottomPadding() + 96.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            if (members.isEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    EmptyState(
-                        title = "相册是空的",
-                        subtitle = if (album.pendingLocal)
-                            "这是刚建好的相册，把照片归档进来后目录才会真正创建。"
-                        else "这个相册里的照片可能已被移动或删除。",
+        Box(
+            Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { dragSelect.containerTopLeft = it.boundsInRoot().topLeft }
+                .pointerInput(Unit) {
+                    detectDragSelect(
+                        state = dragSelect,
+                        onPickStart = { id -> if (vm.selection.value.isEmpty()) vm.addSelection(listOf(id)) },
+                        onPickOver = { vm.addSelection(listOf(it)) },
                     )
+                },
+        ) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(settings.gridColumns),
+                contentPadding = PaddingValues(
+                    start = 10.dp,
+                    end = 10.dp,
+                    top = inner.calculateTopPadding(),
+                    bottom = inner.calculateBottomPadding() + 96.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (members.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        EmptyState(
+                            title = "相册是空的",
+                            subtitle = if (album.pendingLocal)
+                                "这是刚建好的相册，把照片归档进来后目录才会真正创建。"
+                            else "这个相册里的照片可能已被移动或删除。",
+                        )
+                    }
                 }
+                timelineSections(
+                    sections = sections,
+                    selection = selection,
+                    selectionMode = selection.isNotEmpty(),
+                    onPhotoClick = { photo ->
+                        if (selection.isNotEmpty()) vm.toggleSelect(photo.id) else onOpenPhoto(photo)
+                    },
+                    onPhotoLongClick = { vm.toggleSelect(it.id) },
+                    onToggleSection = { section ->
+                        val ids = section.photos.map { it.id }
+                        if (ids.all { it in selection }) vm.replaceSelection(selection - ids.toSet())
+                        else vm.select(ids)
+                    },
+                    dragSelect = dragSelect,
+                )
             }
-            timelineSections(
-                sections = sections,
-                selection = selection,
-                selectionMode = selection.isNotEmpty(),
-                onPhotoClick = { photo ->
-                    if (selection.isNotEmpty()) vm.toggleSelect(photo.id) else onOpenPhoto(photo)
-                },
-                onPhotoLongClick = { vm.toggleSelect(it.id) },
-                onToggleSection = { section ->
-                    val ids = section.photos.map { it.id }
-                    if (ids.all { it in selection }) vm.replaceSelection(selection - ids.toSet())
-                    else vm.select(ids)
-                },
-            )
         }
     }
 }

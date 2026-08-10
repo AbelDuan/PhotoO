@@ -1,5 +1,7 @@
 package com.abel.photoo.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -43,6 +45,10 @@ import kotlin.math.abs
  * 水平方向默认不接管（[horizontalEnabled] = false），留给外层的翻页器，
  * 因为原生 Pager 的跟手翻页手感比自己模拟的好得多。只有用户把左右手势
  * 改成了翻页以外的动作时，外层才会关掉 Pager 滚动并把水平交给这里。
+ *
+ * 删除/退出的"飞出"动画统一为：拖动时图片**不透明**跟手（不再提前变淡），
+ * 松手超过阈值后按屏高比例飞出 + 轻微旋转 + 同步淡出；未达阈值则弹簧回弹。
+ * 这样普通照片、Live 静帧删除时观感一致，不会出现"半透明幽灵"或黑屏割裂。
  */
 @Composable
 fun ZoomableImage(
@@ -74,8 +80,9 @@ fun ZoomableImage(
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var dragX by remember { mutableFloatStateOf(0f) }
-    var dragY by remember { mutableFloatStateOf(0f) }
+    // 手指拖动位移用 Animatable：松手未达阈值时能弹簧弹回，而不是硬生生跳回原位。
+    val dragX = remember { Animatable(0f) }
+    val dragY = remember { Animatable(0f) }
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
     val scope = rememberCoroutineScope()
@@ -84,8 +91,8 @@ fun ZoomableImage(
     LaunchedEffect(resetKey) {
         scale = 1f
         offset = Offset.Zero
-        dragX = 0f
-        dragY = 0f
+        dragX.snapTo(0f)
+        dragY.snapTo(0f)
         exiting = false
         onZoomChanged(false)
     }
@@ -93,19 +100,13 @@ fun ZoomableImage(
     LaunchedEffect(scale) { onZoomChanged(scale > 1.01f) }
 
     val animScale by animateFloatAsState(scale, spring(), label = "scale")
-    // 松手后整张图朝手势方向飞出并淡出，给出明确的"已处理"反馈；动画结束后才真正回调。
+    // 飞出进度 0..1：松手后整张图朝手势方向飞出并淡出（动画结束后才真正回调删除/退出）。
+    // 位移按"屏高/屏宽的比例"计算，任何屏幕都能干净地飞出画面，不再用固定像素值。
     val flyProgress by animateFloatAsState(
-        targetValue = if (exiting) 3700f else 0f,
-        animationSpec = tween(240),
+        targetValue = if (exiting) 1f else 0f,
+        animationSpec = tween(260, easing = FastOutLinearInEasing),
         label = "flyProgress",
     )
-    val flyX = if (exiting && exitDir.isHorizontal) exitDir.sign * flyProgress else 0f
-    val flyY = if (exiting && !exitDir.isHorizontal) exitDir.sign * flyProgress else 0f
-    val displayX = dragX + flyX
-    val displayY = dragY + flyY
-    // 滑动时整张图跟着走并逐渐变淡，给一个"要被处理掉了"的直觉反馈。
-    val travel = maxOf(abs(displayX), abs(displayY))
-    val dragAlpha = (1f - (travel / 900f).coerceIn(0f, 1f)).coerceIn(0f, 1f)
 
     Box(
         modifier = modifier
@@ -178,11 +179,13 @@ fun ZoomableImage(
                             }
                             when (axis) {
                                 Axis.VERTICAL -> {
-                                    dragY += pan.y
+                                    // AwaitPointerEventScope 是受限协程，不能直接调 Animatable 的挂起成员，
+                                    // 借 rememberCoroutineScope 的协程同步 snapTo（无动画，跟手无延迟感）。
+                                    scope.launch { dragY.snapTo(dragY.value + pan.y) }
                                     event.changes.forEach { if (it.positionChanged()) it.consume() }
                                 }
                                 Axis.HORIZONTAL -> {
-                                    dragX += pan.x
+                                    scope.launch { dragX.snapTo(dragX.value + pan.x) }
                                     event.changes.forEach { if (it.positionChanged()) it.consume() }
                                 }
                                 Axis.NONE -> Unit
@@ -195,16 +198,16 @@ fun ZoomableImage(
                         Axis.VERTICAL -> {
                             val threshold = size.height * 0.16f / factor
                             when {
-                                dragY < -threshold -> GestureDirection.UP
-                                dragY > threshold -> GestureDirection.DOWN
+                                dragY.value < -threshold -> GestureDirection.UP
+                                dragY.value > threshold -> GestureDirection.DOWN
                                 else -> null
                             }
                         }
                         Axis.HORIZONTAL -> {
                             val threshold = size.width * 0.22f / factor
                             when {
-                                dragX < -threshold -> GestureDirection.LEFT
-                                dragX > threshold -> GestureDirection.RIGHT
+                                dragX.value < -threshold -> GestureDirection.LEFT
+                                dragX.value > threshold -> GestureDirection.RIGHT
                                 else -> null
                             }
                         }
@@ -217,15 +220,23 @@ fun ZoomableImage(
                             exitDir = dir
                             exiting = true
                             onFlyStart(dir)
-                            scope.launch { kotlinx.coroutines.delay(240); onSwipe(dir) }
+                            scope.launch {
+                                kotlinx.coroutines.delay(260)
+                                onSwipe(dir)
+                            }
                         } else {
-                            dragX = 0f
-                            dragY = 0f
+                            scope.launch {
+                                dragX.animateTo(0f, spring())
+                                dragY.animateTo(0f, spring())
+                            }
                             onSwipe(dir)
                         }
                     } else {
-                        dragX = 0f
-                        dragY = 0f
+                        // 没到阈值：弹簧弹回原位，比瞬间跳回自然得多。
+                        scope.launch {
+                            dragX.animateTo(0f, spring())
+                            dragY.animateTo(0f, spring())
+                        }
                     }
                     if (scale <= 1.02f) {
                         scale = 1f
@@ -240,9 +251,18 @@ fun ZoomableImage(
                 .graphicsLayer {
                     scaleX = animScale
                     scaleY = animScale
-                    translationX = offset.x + displayX
-                    translationY = offset.y + displayY
-                    alpha = dragAlpha
+                    // 拖动阶段：图片不透明跟手（alpha 恒 1），避免"半透明幽灵"观感；
+                    // 飞出阶段：按屏高/屏宽比例位移 + 淡出 + 轻微旋转，所有照片动画一致。
+                    translationX = offset.x + dragX.value +
+                        if (exiting && exitDir.isHorizontal) {
+                            exitDir.sign * flyProgress * size.width * 1.3f
+                        } else 0f
+                    translationY = offset.y + dragY.value +
+                        if (exiting && !exitDir.isHorizontal) {
+                            exitDir.sign * flyProgress * size.height * 1.3f
+                        } else 0f
+                    alpha = if (exiting) (1f - flyProgress).coerceIn(0f, 1f) else 1f
+                    rotationZ = if (exiting) exitDir.sign * 10f * flyProgress else 0f
                 },
         ) {
             if (thumbModel != null) {

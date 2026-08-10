@@ -33,6 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,6 +44,8 @@ import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.TimelineGrouping
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.detectDragSelect
+import com.abel.photoo.ui.components.rememberDragSelectState
 import com.abel.photoo.ui.components.timelineSections
 import com.abel.photoo.ui.util.Format
 
@@ -63,8 +68,21 @@ fun TimelineScreen(
         Format.buildSections(photos, settings.grouping)
     }
     val gridState = rememberLazyGridState()
+    // 长按拖动连续选择：网格容器上报位置，手势检测器命中后追加选中。
+    val dragSelect = rememberDragSelectState()
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { dragSelect.containerTopLeft = it.boundsInRoot().topLeft }
+            .pointerInput(Unit) {
+                detectDragSelect(
+                    state = dragSelect,
+                    onPickStart = { id -> if (vm.selection.value.isEmpty()) vm.addSelection(listOf(id)) },
+                    onPickOver = { vm.addSelection(listOf(it)) },
+                )
+            },
+    ) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(settings.gridColumns),
             state = gridState,
@@ -118,6 +136,7 @@ fun TimelineScreen(
                         vm.select(ids)
                     }
                 },
+                dragSelect = dragSelect,
             )
         }
 

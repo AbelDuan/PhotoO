@@ -13,11 +13,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -26,8 +29,10 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -53,8 +58,6 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,12 +79,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.media.MediaPlayer
 import android.widget.VideoView
+import coil3.compose.AsyncImage
 import com.abel.photoo.model.ExifInfo
 import com.abel.photoo.model.GestureAction
 import com.abel.photoo.model.GestureDirection
@@ -111,6 +116,8 @@ fun ViewerScreen(
     onToggleFavorite: (PhotoItem) -> Unit,
     onMoveToAlbum: (PhotoItem) -> Unit,
     quickAlbums: List<String> = emptyList(),
+    /** 快捷相册名 -> 封面 Uri（null 显示文件夹图标），用于多列网格里的相册卡片。 */
+    quickAlbumCovers: Map<String, Uri?> = emptyMap(),
     onMoveToQuickAlbum: (PhotoItem, String) -> Unit = { _, _ -> },
     onCreateQuickAlbum: (PhotoItem) -> Unit = { _ -> },
     /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取）。 */
@@ -354,6 +361,7 @@ fun ViewerScreen(
                 if (current != null) {
                     QuickAlbumBar(
                         albums = quickAlbums,
+                        covers = quickAlbumCovers,
                         onPick = { onMoveToQuickAlbum(current, it) },
                         onCreate = { onCreateQuickAlbum(current) },
                         onConfigure = { quickPickerVisible = true },
@@ -624,94 +632,131 @@ private fun ViewerBottomBar(
 }
 
 /**
- * 快捷归入条。
- *
- * 底色跟着主题走：每个文件夹轮换取 primary / secondary / tertiary 三组容器色，
- * 这样在黑色的大图背景上既有足够对比度，多个文件夹之间也能一眼区分。
+ * 快捷归入条：多列网格 + 上下滑动，一眼看到更多文件夹，比原来单行横滑高效。
+ * 每个相册是带封面缩略图的方形卡片；「选择 / 新建」是两个操作卡。
  */
 @Composable
 private fun QuickAlbumBar(
     albums: List<String>,
+    covers: Map<String, Uri?>,
     onPick: (String) -> Unit,
     onCreate: () -> Unit = {},
     onConfigure: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
-    val palette = remember(scheme) {
-        listOf(
-            scheme.primaryContainer to scheme.onPrimaryContainer,
-            scheme.tertiaryContainer to scheme.onTertiaryContainer,
-            scheme.secondaryContainer to scheme.onSecondaryContainer,
-        )
-    }
-    LazyRow(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 232.dp),
     ) {
         item {
-            QuickChip(
-                text = "选择",
+            QuickActionTile(
                 icon = Icons.Rounded.Tune,
+                text = "选择",
                 container = scheme.surfaceContainerHighest,
                 content = scheme.onSurface,
                 onClick = onConfigure,
             )
         }
         item {
-            QuickChip(
-                text = "新建",
+            QuickActionTile(
                 icon = Icons.Rounded.Add,
+                text = "新建",
                 container = scheme.surfaceContainerHighest,
                 content = scheme.onSurface,
                 onClick = onCreate,
             )
         }
         items(albums) { name ->
-            val idx = albums.indexOf(name).coerceAtLeast(0)
-            val (container, content) = palette[idx % palette.size]
-            QuickChip(
-                text = name,
-                icon = Icons.Rounded.Folder,
-                container = container,
-                content = content,
+            QuickAlbumTile(
+                name = name,
+                cover = covers[name],
                 onClick = { onPick(name) },
             )
         }
     }
 }
 
+/** 方形操作卡（选择 / 新建）。 */
 @Composable
-private fun QuickChip(
-    text: String,
+private fun QuickActionTile(
     icon: ImageVector,
+    text: String,
     container: Color,
     content: Color,
     onClick: () -> Unit,
 ) {
-    FilterChip(
-        selected = false,
-        onClick = onClick,
-        label = {
-            Text(
-                text,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-        },
-        leadingIcon = {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
-        },
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = container,
-            labelColor = content,
-            iconColor = content,
-        ),
-        border = null,
-    )
+    Column(
+        Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(container)
+            .clickable(onClick = onClick)
+            .padding(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = content,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 快捷相册卡片：封面缩略图 + 名字。 */
+@Composable
+private fun QuickAlbumTile(
+    name: String,
+    cover: Uri?,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (cover != null) {
+                AsyncImage(
+                    model = cover,
+                    contentDescription = name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    Icons.Rounded.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        Text(
+            name,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+    }
 }
 
 /** 大图页直接勾选"哪些文件夹出现在快捷归入条上"。 */

@@ -3,6 +3,9 @@ package com.abel.photoo.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,9 +32,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.abel.photoo.data.media.Thumbs
@@ -39,6 +48,76 @@ import com.abel.photoo.data.media.ThumbRequest
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.TimelineSection
 import com.abel.photoo.ui.util.Format
+import kotlin.math.hypot
+
+/**
+ * 长按拖动连续选择的状态：记录各缩略图在根坐标系里的位置 + 网格容器左上角偏移。
+ * 命中检测时用"根坐标"对齐手指位置，滚动后 onGloballyPositioned 会自动更新，
+ * 因此拖选时网格不滚动也不会串位。
+ */
+class DragSelectState {
+    /** id -> 该缩略图当前在屏幕根坐标系里的包围盒（滚动时会自动更新）。 */
+    val bounds = HashMap<Long, Rect>()
+    /** 承载拖选手势的容器在根坐标系里的左上角，用于把手指坐标换算成根坐标。 */
+    var containerTopLeft: Offset = Offset.Zero
+    var active: Boolean = false
+    fun clear() = bounds.clear()
+}
+
+/** 创建并记住一个拖选状态（挂在网格外层容器上）。 */
+@Composable
+fun rememberDragSelectState(): DragSelectState = remember { DragSelectState() }
+
+/**
+ * 命中检测：返回离 pos 最近、且中心距不超过所在格边长 60% 的缩略图 id。
+ * 用"最近中心距离"而不是"点是否落在矩形内"，滚动回收后残留的旧 bounds
+ * 在屏外距离远，不会误中。
+ */
+private fun hitTest(bounds: Map<Long, Rect>, pos: Offset): Long? {
+    var best: Pair<Long, Float>? = null
+    for ((id, r) in bounds) {
+        if (r.isEmpty) continue
+        val rad = minOf(r.width, r.height) * 0.6f
+        val d = hypot(pos.x - r.center.x, pos.y - r.center.y)
+        if (d <= rad && (best == null || d < best.second)) best = id to d
+    }
+    return best?.first
+}
+
+/**
+ * 长按后拖动即连续选择的手势检测器，挂在网格外层容器上。
+ *
+ * 关键点：普通滚动（长按前手指已动）会被 LazyVerticalGrid 自己消费，这里直接放弃；
+ * 长按成立后，后续移动事件在 [PointerEventPass.Initial] 阶段主动 consume，
+ * 阻止网格滚动抢手势 —— 这时手指划到哪张，哪张就被追加选中。
+ *
+ * @param onPickStart 长按落点命中：若尚未进入多选，选中该张以进入多选；
+ *        已在多选时不做动作（起点交给 item 自己的长按 toggle，避免误取消）。
+ * @param onPickOver  拖动经过：只追加选中。
+ */
+suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectDragSelect(
+    state: DragSelectState,
+    onPickStart: (Long) -> Unit,
+    onPickOver: (Long) -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val start = down.position
+        // 等长按成立；期间手指移动超过 slop（普通滚动/翻页）会取消，返回 null。
+        val longPress = awaitLongPressOrCancellation(down.id)
+        if (longPress == null) return@awaitEachGesture
+        state.active = true
+        hitTest(state.bounds, start + state.containerTopLeft)?.let(onPickStart)
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            hitTest(state.bounds, change.position + state.containerTopLeft)?.let(onPickOver)
+            change.consume()
+        }
+        state.active = false
+    }
+}
 
 /** 网格里的一张缩略图。选中态用缩放 + 蓝色描边表达，比盖一层灰更接近澎湃的观感。 */
 @Composable
@@ -187,6 +266,8 @@ fun LazyGridScope.timelineSections(
     onPhotoClick: (PhotoItem) -> Unit,
     onPhotoLongClick: (PhotoItem) -> Unit,
     onToggleSection: (TimelineSection) -> Unit,
+    /** 传入则开启"长按拖动连续选择"：每个缩略图的位置会上报到该状态供命中检测。 */
+    dragSelect: DragSelectState? = null,
 ) {
     sections.forEach { section ->
         item(
@@ -208,13 +289,27 @@ fun LazyGridScope.timelineSections(
             contentType = { "photo" },
         ) { i ->
             val photo = section.photos[i]
-            PhotoThumb(
-                photo = photo,
-                selected = photo.id in selection,
-                selectionMode = selectionMode,
-                onClick = { onPhotoClick(photo) },
-                onLongClick = { onPhotoLongClick(photo) },
-            )
+            val thumb: @Composable () -> Unit = {
+                PhotoThumb(
+                    photo = photo,
+                    selected = photo.id in selection,
+                    selectionMode = selectionMode,
+                    onClick = { onPhotoClick(photo) },
+                    onLongClick = { onPhotoLongClick(photo) },
+                )
+            }
+            if (dragSelect != null) {
+                // 拖选开启时额外包一层，把缩略图的屏幕包围盒上报给拖选状态。
+                Box(
+                    Modifier.onGloballyPositioned { coords ->
+                        if (coords.isAttached) {
+                            dragSelect.bounds[photo.id] = coords.boundsInRoot()
+                        }
+                    }
+                ) { thumb() }
+            } else {
+                thumb()
+            }
         }
     }
 }

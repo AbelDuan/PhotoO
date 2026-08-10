@@ -133,6 +133,18 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         _selection.value = _selection.value + ids
     }
 
+    /** 长按拖动连续选择：只追加、不取消，起点之外滑过的照片一路选中。 */
+    fun addSelection(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        _selection.value = _selection.value + ids
+    }
+
+    /** 相似照片的"长按拖动连续选择"追加版（只加不减）。 */
+    fun addSimilarPicks(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        _similarPicks.value = _similarPicks.value + ids
+    }
+
     fun replaceSelection(ids: Collection<Long>) {
         _selection.value = ids.toSet()
     }

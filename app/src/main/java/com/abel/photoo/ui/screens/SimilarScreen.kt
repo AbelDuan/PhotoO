@@ -57,7 +57,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,6 +74,8 @@ import com.abel.photoo.model.SimilarityLevel
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.detectDragSelect
+import com.abel.photoo.ui.components.rememberDragSelectState
 import com.abel.photoo.ui.components.timelineSections
 import com.abel.photoo.ui.util.Format
 
@@ -188,6 +193,7 @@ fun SimilarScreen(
                     group = group,
                     picks = picks,
                     onTogglePick = vm::toggleSimilarPick,
+                    onAddPicks = vm::addSimilarPicks,
                     onOpenPhoto = onOpenPhoto,
                     onOpenGroup = onOpenGroup,
                     onIgnore = { vm.resolveGroup(group.key) },
@@ -341,10 +347,13 @@ private fun SimilarGroupCard(
     group: SimilarGroup,
     picks: Set<Long>,
     onTogglePick: (Long) -> Unit,
+    onAddPicks: (Collection<Long>) -> Unit,
     onOpenPhoto: (PhotoItem) -> Unit,
     onOpenGroup: (String) -> Unit,
     onIgnore: () -> Unit,
 ) {
+    // 组内横向行的"长按拖动连续选择"：长按某张不松手横向划过，划过的都追加勾选。
+    val dragSelect = rememberDragSelectState()
     Column(
         Modifier
             .fillMaxWidth()
@@ -389,20 +398,37 @@ private fun SimilarGroupCard(
         }
 
         Row(
-            Modifier.horizontalScroll(rememberScrollState()),
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .onGloballyPositioned { dragSelect.containerTopLeft = it.boundsInRoot().topLeft }
+                .pointerInput(Unit) {
+                    detectDragSelect(
+                        state = dragSelect,
+                        onPickStart = { id -> if (picks.isEmpty()) onAddPicks(setOf(id)) },
+                        onPickOver = { onAddPicks(setOf(it)) },
+                    )
+                },
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             group.items.forEach { photo ->
-                SimilarTile(
-                    photo = photo,
-                    picked = photo.id in picks,
-                    suggested = photo.id == group.suggestedKeepId,
-                    onOpen = {
-                        // 已处于多选态时，单击继续增减选择；否则单击查看大图
-                        if (picks.isNotEmpty()) onTogglePick(photo.id) else onOpenPhoto(photo)
-                    },
-                    onTogglePick = { onTogglePick(photo.id) },
-                )
+                Box(
+                    Modifier.onGloballyPositioned { coords ->
+                        if (coords.isAttached) {
+                            dragSelect.bounds[photo.id] = coords.boundsInRoot()
+                        }
+                    }
+                ) {
+                    SimilarTile(
+                        photo = photo,
+                        picked = photo.id in picks,
+                        suggested = photo.id == group.suggestedKeepId,
+                        onOpen = {
+                            // 已处于多选态时，单击继续增减选择；否则单击查看大图
+                            if (picks.isNotEmpty()) onTogglePick(photo.id) else onOpenPhoto(photo)
+                        },
+                        onTogglePick = { onTogglePick(photo.id) },
+                    )
+                }
             }
         }
     }
@@ -643,7 +669,22 @@ fun SimilarGroupDetailScreen(
             )
         },
     ) { inner ->
-        Box(Modifier.fillMaxSize()) {
+        // 相似组详情网格的"长按拖动连续选择"：划过的照片一路追加勾选。
+        val dragSelect = rememberDragSelectState()
+        Box(
+            Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { dragSelect.containerTopLeft = it.boundsInRoot().topLeft }
+                .pointerInput(Unit) {
+                    detectDragSelect(
+                        state = dragSelect,
+                        onPickStart = { id ->
+                            if (vm.similarPicks.value.isEmpty()) vm.addSimilarPicks(setOf(id))
+                        },
+                        onPickOver = { vm.addSimilarPicks(setOf(it)) },
+                    )
+                },
+        ) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(settings.gridColumns),
                 contentPadding = PaddingValues(
@@ -669,6 +710,7 @@ fun SimilarGroupDetailScreen(
                         if (sids.all { it in picks }) vm.setSimilarPicks(picks - sids.toSet())
                         else vm.setSimilarPicks(picks + sids.toSet())
                     },
+                    dragSelect = dragSelect,
                 )
             }
 
