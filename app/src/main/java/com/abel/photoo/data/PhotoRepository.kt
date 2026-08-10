@@ -2,6 +2,7 @@ package com.abel.photoo.data
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.abel.photoo.data.db.PhotoODb
 import com.abel.photoo.data.exif.ExifReader
 import com.abel.photoo.data.media.MediaOps
@@ -176,6 +177,10 @@ class PhotoRepository(
 
             // 图库变化后旧的分组可能已经失效，用现存哈希重算一遍（很快，不需要重新扫描）。
             if (hashCache.isNotEmpty()) rebuildGroups()
+        } catch (e: Throwable) {
+            // 任何加载异常都兜底成提示，绝不向上抛到 scope 导致进程被杀（闪退）。
+            Log.e("PhotoO", "refresh failed", e)
+            emit("加载失败：${e::class.simpleName ?: "Error"}${e.message?.let { "：$it" } ?: ""}")
         } finally {
             _loading.value = false
         }

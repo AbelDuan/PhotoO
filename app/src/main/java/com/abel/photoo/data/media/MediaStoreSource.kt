@@ -64,28 +64,34 @@ class MediaStoreSource(private val context: Context) {
             val orientationIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.ORIENTATION)
 
             while (c.moveToNext()) {
-                val id = c.getLong(idIdx)
-                val modifiedMs = (c.getLongOrNull(modifiedIdx) ?: 0L) * 1000L
-                val takenMs = c.getLongOrNull(takenIdx)?.takeIf { it > 0L } ?: modifiedMs
-                val relative = c.getStringOrNull(pathIdx).orEmpty()
-                val bucketName = c.getStringOrNull(bucketNameIdx)
-                    ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
+                try {
+                    val id = c.getLong(idIdx)
+                    val modifiedMs = (c.getLongOrNull(modifiedIdx) ?: 0L) * 1000L
+                    val takenMs = c.getLongOrNull(takenIdx)?.takeIf { it > 0L } ?: modifiedMs
+                    val relative = c.getStringOrNull(pathIdx).orEmpty()
+                    val bucketName = c.getStringOrNull(bucketNameIdx)
+                        ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
 
-                out += PhotoItem(
-                    id = id,
-                    uri = ContentUris.withAppendedId(collection, id),
-                    displayName = c.getStringOrNull(nameIdx).orEmpty(),
-                    bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong(),
-                    bucketName = bucketName,
-                    relativePath = relative,
-                    dateTaken = takenMs,
-                    dateModified = modifiedMs,
-                    size = c.getLongOrNull(sizeIdx) ?: 0L,
-                    width = c.getIntOrNull(widthIdx) ?: 0,
-                    height = c.getIntOrNull(heightIdx) ?: 0,
-                    mimeType = c.getStringOrNull(mimeIdx).orEmpty(),
-                    orientation = c.getIntOrNull(orientationIdx) ?: 0,
-                )
+                    out += PhotoItem(
+                        id = id,
+                        uri = ContentUris.withAppendedId(collection, id),
+                        displayName = c.getStringOrNull(nameIdx).orEmpty(),
+                        bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong(),
+                        bucketName = bucketName,
+                        relativePath = relative,
+                        dateTaken = takenMs,
+                        dateModified = modifiedMs,
+                        size = c.getLongOrNull(sizeIdx) ?: 0L,
+                        width = c.getIntOrNull(widthIdx) ?: 0,
+                        height = c.getIntOrNull(heightIdx) ?: 0,
+                        mimeType = c.getStringOrNull(mimeIdx).orEmpty(),
+                        orientation = c.getIntOrNull(orientationIdx) ?: 0,
+                    )
+                } catch (e: Throwable) {
+                    // 部分授权（Android 14+ 选了"仅部分照片"）下，未选中行的列读取会抛
+                    // SecurityException，跳过这一行而不是让整次加载崩溃。
+                    android.util.Log.w("PhotoO", "skip unreadable media row", e)
+                }
             }
         }
 

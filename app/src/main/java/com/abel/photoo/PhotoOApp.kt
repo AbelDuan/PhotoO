@@ -1,6 +1,7 @@
 package com.abel.photoo
 
 import android.app.Application
+import android.util.Log
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -8,9 +9,14 @@ import coil3.memory.MemoryCache
 import com.abel.photoo.data.PhotoRepository
 import com.abel.photoo.data.media.MediaRequestBroker
 import com.abel.photoo.data.prefs.AppPrefs
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 应用入口。
@@ -25,12 +31,33 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        installCrashLogger()
         container = AppContainer(this)
     }
 
     override fun onTerminate() {
         container.close()
         super.onTerminate()
+    }
+
+    /**
+     * 兜底：把任何未被协程/界面捕获的崩溃栈写入 filesDir/photoo_crash.log，
+     * 方便在没有 IDE 的真机上定位问题。写完仍交给系统默认处理器弹崩溃框。
+     */
+    private fun installCrashLogger() {
+        val default = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val log = File(filesDir, "photoo_crash.log")
+                log.appendText(
+                    "=== ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date())} ===\n" +
+                        throwable.stackTraceToString() + "\n\n"
+                )
+            } catch (_: Throwable) {
+                // 写日志失败也不能影响系统崩溃流程
+            }
+            default?.uncaughtException(thread, throwable)
+        }
     }
 
     /**
@@ -51,7 +78,12 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
 
 class AppContainer(app: Application) {
 
-    private val scope = CoroutineScope(SupervisorJob())
+    /** 协程异常兜底：记录日志而不是让进程直接被杀。 */
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Log.e("PhotoO", "uncaught in repository scope", e)
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + exceptionHandler)
 
     val prefs = AppPrefs(app)
     val broker = MediaRequestBroker()
