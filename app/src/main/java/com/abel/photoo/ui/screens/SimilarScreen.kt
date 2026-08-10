@@ -382,7 +382,10 @@ private fun SimilarGroupCard(
                     photo = photo,
                     picked = photo.id in picks,
                     suggested = photo.id == group.suggestedKeepId,
-                    onOpen = { onOpenPhoto(photo) },
+                    onOpen = {
+                        // 已处于多选态时，单击继续增减选择；否则单击查看大图
+                        if (picks.isNotEmpty()) onTogglePick(photo.id) else onOpenPhoto(photo)
+                    },
                     onTogglePick = { onTogglePick(photo.id) },
                 )
             }
