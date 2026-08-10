@@ -23,7 +23,6 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
-        db.execSQL("PRAGMA journal_mode=WAL;")
     }
 
     override fun onCreate(db: SQLiteDatabase) {
