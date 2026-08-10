@@ -7,6 +7,7 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import com.abel.photoo.data.PhotoRepository
+import com.abel.photoo.data.log.PhotoLog
 import com.abel.photoo.data.media.MediaRequestBroker
 import com.abel.photoo.data.media.ThumbnailFetcherFactory
 import com.abel.photoo.data.prefs.AppPrefs
@@ -33,6 +34,7 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         installCrashLogger()
+        PhotoLog.init(this)
         container = AppContainer(this)
     }
 

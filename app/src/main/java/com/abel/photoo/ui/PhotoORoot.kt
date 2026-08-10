@@ -434,7 +434,9 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onMarkKept = { vm.markKept(listOf(it.id)) },
                     gestures = settings.gestures,
                     sensitivity = settings.gestureSensitivity.factor,
-                    liveAutoPlay = settings.liveAutoPlay,
+                    // 实况识别与自动播放默认开启且不再提供设置开关，这里恒为 true
+                    // （避免老版本把 liveAutoPlay 存成 false 的用户无法自动播放）。
+                    liveAutoPlay = true,
                     liveMuted = liveMuted,
                     onSetLiveMuted = vm::setLiveMuted,
                 )

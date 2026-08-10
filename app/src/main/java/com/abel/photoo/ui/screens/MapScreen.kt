@@ -104,8 +104,12 @@ fun MapScreen(
     val settings by vm.settings.collectAsStateWithLifecycle()
 
     var level by remember { mutableStateOf(com.abel.photoo.data.geo.GeoClusterer.Level.DISTRICT) }
-    // 已经解析出的地址名（cluster.key -> 地址）。WebView 回调与离线 Geocoder 都往这里写。
+    // 已经解析出的地址名（cluster.key -> 地址）。一律由 Kotlin 侧解析：
+    // 有高德 key 时内部走高德 REST 逆地理（失败回退设备 Geocoder），没 key 直接走设备 Geocoder。
+    // 不依赖 WebView 里 JS 的逆地理——key 无效 / JS 加载失败时地址依然能出来。
     val places = remember { mutableStateMapOf<String, String>() }
+    // 高德底图加载失败（key 无效 / 断网）时回退离线示意图，不再白屏。
+    var amapFailed by remember(settings.amapKey) { mutableStateOf(false) }
 
     LaunchedEffect(photos.size) {
         if (photos.isNotEmpty()) vm.scanGeo()
@@ -116,9 +120,8 @@ fun MapScreen(
         com.abel.photoo.data.geo.GeoClusterer.cluster(geoPoints, byId, level)
     }
 
-    // 离线兜底：没填高德 key 时，用设备 Geocoder 把每个簇反查成地址（全量，逐条渐进）。
+    // 地址解析：逐簇渐进，两种底图模式共用这一条路径。
     LaunchedEffect(clusters, settings.amapKey) {
-        if (settings.amapKey.isNotBlank()) return@LaunchedEffect
         if (!settings.showLocation) return@LaunchedEffect
         clusters.forEach { c ->
             if (places.containsKey(c.key)) return@forEach
@@ -213,18 +216,22 @@ fun MapScreen(
             item("plot") {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        if (useOnline) "拍摄地点分布（高德联网底图，双指缩放 / 拖动平移，点圆点进相册）"
-                        else "拍摄地点分布（离线示意图，点圆点进相册）",
+                        when {
+                            !useOnline -> "拍摄地点分布（离线示意图，点圆点进相册）"
+                            amapFailed -> "高德底图加载失败（Key 无效或网络问题），已切换离线示意图"
+                            else -> "拍摄地点分布（高德联网底图，双指缩放 / 拖动平移，点圆点进相册）"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (useOnline) {
+                    if (useOnline && !amapFailed) {
                         AMapView(
                             clusters = clusters,
                             amapKey = settings.amapKey,
                             places = places,
                             onOpenCluster = onOpenCluster,
                             onName = { key, name -> if (name.isNotBlank()) places[key] = name },
+                            onFailed = { amapFailed = true },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(360.dp)
@@ -268,7 +275,7 @@ fun MapScreen(
     }
 }
 
-/** 一个地点的卡片：封面 + 张数 + 时间跨度 + 一排缩略图；点标题区进入该地址相册。 */
+/** 一个地点的卡片：标题 + 张数/时间跨度 + 一排缩略图；点标题区进入该地址相册。布局对齐相似栏目。 */
 @Composable
 private fun ClusterCard(
     cluster: GeoCluster,
@@ -292,22 +299,11 @@ private fun ClusterCard(
                 .clickable { onOpenCluster() }
                 .padding(vertical = 2.dp),
         ) {
-            cluster.cover?.let { cover ->
-                AsyncImage(
-                    model = ThumbRequest(cover.uri, Thumbs.TARGET),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(14.dp)),
-                )
-                Spacer(Modifier.width(12.dp))
-            }
             Column(Modifier.weight(1f)) {
                 Text(
                     place ?: Format.latLon(cluster.lat, cluster.lon),
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
                     color = scheme.onSurface,
                 )
@@ -383,6 +379,7 @@ private fun AMapView(
     places: Map<String, String>,
     onOpenCluster: (GeoCluster) -> Unit,
     onName: (String, String) -> Unit,
+    onFailed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -413,6 +410,23 @@ private fun AMapView(
                         super.onPageFinished(view, url)
                         val (cs, ps) = renderArgs.get()
                         view?.postDelayed({ doRender(view, cs, ps) }, 250)
+                        // 高德 JS 若因 key 无效 / 网络被墙而没初始化，onAmapReady 不会执行。
+                        // 等 5 秒后探一次 window.amapReady，仍是 false 就判定失败回退离线图。
+                        view?.postDelayed({
+                            view.evaluateJavascript("window.amapReady?true:false") { r ->
+                                if (r != "true") onFailed()
+                            }
+                        }, 5000)
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView?,
+                        request: android.webkit.WebResourceRequest?,
+                        error: android.webkit.WebResourceError?,
+                    ) {
+                        // 只有主框架（页面 / 高德脚本本身）失败才回退；
+                        // 地图瓦片等子资源偶发失败不能误判。
+                        if (request?.isForMainFrame == true) onFailed()
                     }
                 }
                 addJavascriptInterface(object {

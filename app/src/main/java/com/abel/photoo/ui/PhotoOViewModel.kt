@@ -242,6 +242,9 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     /** 手动重新扫描实况照片（清空识别结果后重扫），设置页"重新扫描实况照片"调用。 */
     fun rescanLivePhotos() = repo.rescanLivePhotos()
 
+    /** 把调试日志复制到系统「下载」目录，供用户导出。 */
+    fun exportLogs() = repo.exportLogs()
+
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)
 

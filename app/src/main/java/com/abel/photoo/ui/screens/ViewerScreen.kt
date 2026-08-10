@@ -149,6 +149,14 @@ fun ViewerScreen(
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
+    // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
+    // 越界时 Pager 会渲染出一页空白（黑屏），这里主动纠正回最后一个有效页。
+    LaunchedEffect(photos.size) {
+        if (photos.isNotEmpty() && pagerState.currentPage > photos.lastIndex) {
+            scope.launch { pagerState.scrollToPage(photos.lastIndex) }
+        }
+    }
+
     fun actionOf(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
 
     // 左右都还是"翻页"时交给 Pager 自己滚，跟手感受最好；
@@ -230,6 +238,9 @@ fun ViewerScreen(
             state = pagerState,
             userScrollEnabled = horizontalIsPaging && !zoomed,
             beyondViewportPageCount = 1,
+            // 用照片 id 做页 key：删除中间某张后，后续页面的内容跟着 id 走，
+            // 不会因为 position 前移而串页。
+            key = { photos[it].id },
             modifier = Modifier.fillMaxSize(),
         ) { page ->
             val photo = photos[page]
@@ -255,7 +266,11 @@ fun ViewerScreen(
                 overlay = if (isCurrent && livePlaying && liveUri != null) {
                     {
                         key(liveUri) {
-                            LiveVideoLayer(uri = liveUri!!, muted = liveMuted)
+                            LiveVideoLayer(
+                                uri = liveUri!!,
+                                muted = liveMuted,
+                                onFinished = { livePlaying = false },
+                            )
                         }
                     }
                 } else null,
@@ -475,7 +490,7 @@ private fun LiveGlyph(active: Boolean) {
 
 /** Live Photo 视频层。放在手势 Box 内部，VideoView 不消费触摸，滑动手势照常可用。 */
 @Composable
-private fun LiveVideoLayer(uri: Uri, muted: Boolean) {
+private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     AndroidView(
         factory = { ctx ->
@@ -485,12 +500,20 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean) {
                 setVideoURI(uri)
                 setOnPreparedListener { mp: MediaPlayer ->
                     player = mp
-                    mp.isLooping = true
+                    // 播一遍就停（微信实况也是单次播放）：结束后停在最后一帧，
+                    // LIVE 徽标回到未播放态，再点一下从头重播。
+                    mp.isLooping = false
                     val v = if (muted) 0f else 1f
                     runCatching { mp.setVolume(v, v) }
                     start()
                 }
-                setOnErrorListener { _, _, _ -> true }
+                // 播放完成：通知外层把 livePlaying 复位（回调在主线程，可直接改状态）。
+                setOnCompletionListener { onFinished() }
+                setOnErrorListener { _, _, _ ->
+                    // 解码失败也算"播完"，把状态复位，避免 LIVE 一直转圈。
+                    onFinished()
+                    true
+                }
             }
         },
         update = {

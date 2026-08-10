@@ -148,13 +148,7 @@ fun SettingsScreen(
 
         item("live") {
             SettingsGroup("Live Photo", Icons.Rounded.MotionPhotosOn) {
-                SwitchRow(
-                    title = "打开即自动播放",
-                    subtitle = "进入大图时自动播放实况；每次启动应用后的第一次播放都是静音的，" +
-                        "在大图左上角的 LIVE 标旁边可以随时开声音。",
-                    checked = settings.liveAutoPlay,
-                    onChange = vm::setLiveAutoPlay,
-                )
+                Hint("实况照片自动识别：进入大图即自动播放一次（默认静音，点 LIVE 标可开声），无需任何开关。")
                 ActionRow(
                     title = "重新扫描实况照片",
                     subtitle = "清空已识别结果并重新检测内嵌视频（小米/华为等）",
@@ -307,6 +301,11 @@ fun SettingsScreen(
                 Hint(
                     "PhotoO 只读写本机相册，不联网、不上传任何照片或位置信息。\n" +
                         "回收站是应用内的软删除；只有在回收站里再次删除，才会真正调用系统删除。"
+                )
+                ActionRow(
+                    title = "导出调试日志",
+                    subtitle = "把运行日志复制到「下载」文件夹，方便排查 Live Photo / 地图等问题",
+                    onClick = vm::exportLogs,
                 )
             }
         }

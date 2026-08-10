@@ -1,10 +1,14 @@
 package com.abel.photoo.data
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.abel.photoo.data.db.PhotoODb
 import com.abel.photoo.data.exif.ExifReader
+import com.abel.photoo.data.log.PhotoLog
 import com.abel.photoo.data.media.MediaOps
 import com.abel.photoo.data.media.MediaRequestBroker
 import com.abel.photoo.data.media.MediaStoreSource
@@ -272,15 +276,18 @@ class PhotoRepository(
         val idSet = ids.toHashSet()
         val targets = _photos.value.filter { it.id in idSet }
         if (targets.isEmpty()) return
+        PhotoLog.i("Trash", "move: ids=$ids systemTrash=${prefs.current.alsoSystemTrash}")
 
         scope.launch {
             if (prefs.current.alsoSystemTrash) {
                 val result = ops.setSystemTrashed(targets.map { it.uri }, true)
                 if (result is OpResult.Cancelled) {
+                    PhotoLog.i("Trash", "cancelled by user")
                     emit("已取消删除")
                     return@launch
                 }
                 if (result is OpResult.Failure) {
+                    PhotoLog.w("Trash", "system-trash-failed: ${result.message}")
                     emit(result.message)
                     return@launch
                 }
@@ -563,27 +570,29 @@ class PhotoRepository(
                 // 已经识别过的（含落库的内嵌/外部）跳过。
                 val toCheck = photos.filter {
                     it.liveType == 0 &&
-                        (it.mimeType == "image/jpeg" ||
-                            it.mimeType == "image/heic" ||
-                            it.mimeType == "image/heif") &&
+                        it.mimeType.startsWith("image/") &&
                         it.id !in known
                 }
+                PhotoLog.i("LiveScan", "start: checked=${toCheck.size}, known=${known.size}, total=${photos.size}")
                 // 分块扫描，每处理若干张让出一次，避免长期占用 IO 线程影响其它加载。
+                var recognized = 0
                 toCheck.chunked(40).forEach { chunk ->
                     if (!isActive) return@launch
                     val batch = ArrayList<PhotoODb.LiveRow>(chunk.size)
                     val updates = HashMap<Long, Long>() // id -> offset（仅实况需要更新内存标记）
                     chunk.forEach { photo ->
-                        val offset = detectEmbeddedLive(photo.uri)
+                        val offset = detectEmbeddedLive(photo)
                         when {
                             offset > 0 -> {
                                 batch += PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = offset, cachedPath = null)
                                 updates[photo.id] = offset
+                                recognized++
                             }
                             offset == -1L -> {
                                 // 确定是实况但偏移未知，标记 type2/offset=0，抽取时整文件扫描。
                                 batch += PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = 0, cachedPath = null)
                                 updates[photo.id] = 0
+                                recognized++
                             }
                             else -> {
                                 // 不是实况，落库负结果，下次启动直接跳过。
@@ -599,7 +608,9 @@ class PhotoRepository(
                     }
                     kotlinx.coroutines.yield()
                 }
+                PhotoLog.i("LiveScan", "done: recognized=$recognized")
             } catch (e: Throwable) {
+                PhotoLog.e("LiveScan", "failed: $e")
                 Log.w("PhotoO", "scanLivePhotos failed", e)
             }
         }
@@ -622,6 +633,43 @@ class PhotoRepository(
                 Log.w("PhotoO", "rescanLivePhotos failed", e)
                 emit("重新扫描失败：${e.message ?: e::class.simpleName}")
             }
+        }
+    }
+
+    /**
+     * 把日志文件复制到系统「下载」目录（MediaStore，无需权限），
+     * 返回实际写入的文件名；失败返回 null 并提示。
+     */
+    fun exportLogs() {
+        scope.launch(Dispatchers.IO) {
+            val log = PhotoLog.file()
+            if (log == null || !log.exists()) {
+                emit("还没有日志文件")
+                return@launch
+            }
+            val ok = runCatching {
+                val name = "PhotoO-log-${java.text.SimpleDateFormat(
+                    "yyyyMMdd-HHmmss", java.util.Locale.US
+                ).format(java.util.Date())}.txt"
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = context.contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                )
+                if (uri == null) return@runCatching null
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    log.inputStream().use { it.copyTo(out) }
+                } ?: run {
+                    context.contentResolver.delete(uri, null, null)
+                    return@runCatching null
+                }
+                name
+            }.getOrNull()
+            if (ok != null) emit("日志已导出：下载/$ok")
+            else emit("导出失败：无法写入下载目录，请检查存储空间")
         }
     }
 
@@ -701,8 +749,17 @@ class PhotoRepository(
     suspend fun reverseGeocode(lat: Double, lon: Double): String? {
         if (!CoordTransform.isValid(lat, lon)) return null
         val key = prefs.current.amapKey
-        if (key.isNotBlank()) amapRegeo(lat, lon, key)?.let { return it }
-        return runCatching { exif.geocode(lat, lon) }.getOrNull()
+        if (key.isNotBlank()) {
+            val fromAmap = amapRegeo(lat, lon, key)
+            if (fromAmap != null) {
+                PhotoLog.i("Geo", "regeo-amap-ok: $lat,$lon -> $fromAmap")
+                return fromAmap
+            }
+            PhotoLog.w("Geo", "regeo-amap-failed: $lat,$lon fallback-to-geocoder")
+        }
+        val local = runCatching { exif.geocode(lat, lon) }.getOrNull()
+        if (local == null) PhotoLog.w("Geo", "regeo-geocoder-failed: $lat,$lon")
+        return local
     }
 
     /** 高德逆地理编码 REST（坐标需先转 GCJ-02）。 */
@@ -754,18 +811,31 @@ class PhotoRepository(
     suspend fun resolveLiveVideo(photo: PhotoItem): Uri? {
         return withContext(Dispatchers.IO) {
             when (photo.liveType) {
-                1 -> photo.liveVideoUri
+                1 -> {
+                    PhotoLog.i("LivePlay", "type1: id=${photo.id} name=${photo.displayName} uri=${photo.liveVideoUri}")
+                    photo.liveVideoUri
+                }
                 2 -> {
                     val cached = db.getLiveCachePath(photo.id)
-                    if (cached != null) return@withContext Uri.fromFile(java.io.File(cached))
+                    if (cached != null) {
+                        PhotoLog.i("LivePlay", "type2-cached: id=${photo.id} name=${photo.displayName} path=$cached")
+                        return@withContext Uri.fromFile(java.io.File(cached))
+                    }
                     val dir = java.io.File(context.cacheDir, "livephoto").also { it.mkdirs() }
                     val out = java.io.File(dir, "${photo.id}.mp4")
                     if (extractEmbeddedVideo(photo, out)) {
                         db.setLiveCachePath(photo.id, out.absolutePath)
+                        PhotoLog.i("LivePlay", "type2-extracted: id=${photo.id} name=${photo.displayName} size=${out.length()}")
                         Uri.fromFile(out)
-                    } else null
+                    } else {
+                        PhotoLog.e("LivePlay", "type2-extract-failed: id=${photo.id} name=${photo.displayName} type=${photo.liveType} offset=${photo.liveOffset} size=${photo.size}")
+                        null
+                    }
                 }
-                else -> null
+                else -> {
+                    PhotoLog.w("LivePlay", "not-live: id=${photo.id} name=${photo.displayName} type=${photo.liveType}")
+                    null
+                }
             }
         }
     }
@@ -778,10 +848,10 @@ class PhotoRepository(
      * - 三星 HEIC：`Container:ItemLocation="N"` 给出内嵌视频在文件中的偏移。
      * 读不到标记返回 0（不是实况）；有标记但偏移读不出返回 -1（让抽取阶段整文件扫描）。
      */
-    private fun detectEmbeddedLive(uri: Uri): Long {
-        return runCatching {
+    private fun detectEmbeddedLive(photo: PhotoItem): Long {
+        val result = runCatching {
             val head = ByteArray(256 * 1024)
-            val read = resolver().openInputStream(uri)?.use { it.read(head) } ?: return 0
+            val read = resolver().openInputStream(photo.uri)?.use { it.read(head) } ?: return 0
             if (read <= 0) return 0
             val text = String(head, 0, read, Charsets.US_ASCII)
             // 必须先确认这是带实况标记的文件，再取偏移，避免误判普通图片。
@@ -791,13 +861,21 @@ class PhotoRepository(
                 text.contains("MotionPhotoData", ignoreCase = true) ||
                 text.contains("Container:Directory", ignoreCase = true) ||
                 text.contains("Container:Item", ignoreCase = true)
-            if (!hasMarker) return 0
+            if (!hasMarker) {
+                PhotoLog.i("LiveScan", "no-marker: id=${photo.id} name=${photo.displayName} mime=${photo.mimeType}")
+                return 0
+            }
             // 依次尝试几种偏移写法；命中任意一个就直接用。
             parseOffset(text, "MicroVideoOffset")?.let { return it }
             parseOffset(text, "Container:ItemLocation")?.let { return it }
+            PhotoLog.w("LiveScan", "marker-but-no-offset: id=${photo.id} name=${photo.displayName} mime=${photo.mimeType}")
             // 有实况标记但 XMP 偏移损坏/读不出：返回 -1 让抽取阶段整文件扫描定位视频。
             -1L
         }.getOrDefault(0L)
+        if (result > 0) {
+            PhotoLog.i("LiveScan", "embedded: id=${photo.id} name=${photo.displayName} offset=$result mime=${photo.mimeType}")
+        }
+        return result
     }
 
     /**
@@ -819,27 +897,43 @@ class PhotoRepository(
      * 第 (3) 步成功后把真实偏移回填数据库，下次抽取直接走 (1)。
      */
     private fun extractEmbeddedVideo(photo: PhotoItem, out: java.io.File): Boolean {
-        return runCatching {
+        return try {
             val resolver = resolver()
             val offset = photo.liveOffset
             // 优先：偏移从文件头算起。
             if (offset > 0 &&
                 tryExtract(resolver, photo.uri, offset, out) && isValidVideo(out)
-            ) return@runCatching true
-            // 回退：部分机型偏移是从文件尾算起的剩余字节长度。
-            if (offset > 0) {
+            ) {
+                PhotoLog.i("LiveExtract", "ok-by-offset: id=${photo.id} name=${photo.displayName} offset=$offset")
+                true
+            } else if (offset > 0) {
+                // 回退：部分机型偏移是从文件尾算起的剩余字节长度。
                 val fromEnd = (photo.size - offset).coerceAtLeast(0)
-                if (fromEnd > 0 && tryExtract(resolver, photo.uri, fromEnd, out) && isValidVideo(out)
-                ) return@runCatching true
+                if (fromEnd > 0 && tryExtract(resolver, photo.uri, fromEnd, out) && isValidVideo(out)) {
+                    PhotoLog.i("LiveExtract", "ok-by-fromEnd: id=${photo.id} name=${photo.displayName} offset=$offset size=${photo.size}")
+                    true
+                } else {
+                    fullScanFallback(photo, out, offset)
+                }
+            } else {
+                fullScanFallback(photo, out, offset)
             }
-            // 兜底：整文件扫描定位内嵌视频的真实起点（ftyp 盒）。
-            val found = findEmbeddedVideoStart(resolver, photo.uri, photo.size)
-            if (found >= 0 && tryExtract(resolver, photo.uri, found, out) && isValidVideo(out)) {
-                db.setLiveOffset(photo.id, found) // 记下真实偏移，下次无需再全扫
-                return@runCatching true
-            }
+        } catch (e: Throwable) {
+            PhotoLog.e("LiveExtract", "exception: id=${photo.id} name=${photo.displayName} e=$e")
             false
-        }.getOrDefault(false)
+        }
+    }
+
+    /** 整文件扫描定位内嵌视频（Xiaomi 偏移常不准 / 偏移缺失时兜底），成功后回填真实偏移。 */
+    private fun fullScanFallback(photo: PhotoItem, out: java.io.File, offset: Long): Boolean {
+        val found = findEmbeddedVideoStart(resolver(), photo.uri, photo.size)
+        if (found >= 0 && tryExtract(resolver(), photo.uri, found, out) && isValidVideo(out)) {
+            db.setLiveOffset(photo.id, found) // 记下真实偏移，下次无需再全扫
+            PhotoLog.i("LiveExtract", "ok-by-fullscan: id=${photo.id} name=${photo.displayName} found=$found")
+            return true
+        }
+        PhotoLog.w("LiveExtract", "FAIL: id=${photo.id} name=${photo.displayName} offset=$offset size=${photo.size} found=$found")
+        return false
     }
 
     private fun tryExtract(resolver: android.content.ContentResolver, uri: Uri, skip: Long, out: java.io.File): Boolean {

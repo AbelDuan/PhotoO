@@ -84,7 +84,16 @@ class MediaStoreSource(private val context: Context) {
                     // Live Photo：同 bucket 下存在同名视频（IMG_1234.HEIC + IMG_1234.MOV）。
                     // 内嵌视频（小米等把实况写进 JPG）由后台扫描 XMP 检测，见 PhotoRepository.scanLivePhotos。
                     val stem = name.substringBeforeLast('.', name)
-                    val live = liveMap[Pair(bucketId, stem)]
+                    // 部分机型（小米录像时按实况键同步拍）给照片名加后缀：VID_xxx_cover.jpg ↔ VID_xxx.mp4。
+                    // 找不到完全同名时，去掉常见后缀再试一次。
+                    val live = liveMap[Pair(bucketId, stem)] ?: run {
+                        val base = stem
+                            .removeSuffix("_cover")
+                            .removeSuffix("_photo")
+                            .removeSuffix("_thumb")
+                            .removeSuffix("_poster")
+                        liveMap[Pair(bucketId, base)]
+                    }
 
                     out += PhotoItem(
                         id = id,
