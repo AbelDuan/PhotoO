@@ -82,8 +82,8 @@ class ExifReader(private val context: Context) {
                 .takeIf { it > 0 }
                 ?.let { "等效 $it mm" },
             whiteBalance = when (exif.getAttributeInt(ExifInterface.TAG_WHITE_BALANCE, -1)) {
-                ExifInterface.WHITE_BALANCE_AUTO -> "自动白平衡"
-                ExifInterface.WHITE_BALANCE_MANUAL -> "手动白平衡"
+                ExifInterface.WHITE_BALANCE_AUTO.toInt() -> "自动白平衡"
+                ExifInterface.WHITE_BALANCE_MANUAL.toInt() -> "手动白平衡"
                 else -> null
             },
             flash = exif.getAttributeInt(ExifInterface.TAG_FLASH, -1).takeIf { it >= 0 }
