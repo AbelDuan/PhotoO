@@ -30,6 +30,8 @@ data class Settings(
     val showLocation: Boolean = true,
     /** 大图页一键归入的相册名列表（用户自选的常用文件夹）。 */
     val quickAlbums: List<String> = emptyList(),
+    /** 相册展示顺序：按 relativePath 排序，列表里没有的落到末尾按时间排。 */
+    val albumOrder: List<String> = emptyList(),
 )
 
 /**
@@ -58,6 +60,8 @@ class AppPrefs(context: Context) {
         showLocation = sp.getBoolean(KEY_LOCATION, true),
         quickAlbums = sp.getString(KEY_QUICK, "")
             .orEmpty().split(QUICK_DELIM).filter { it.isNotEmpty() },
+        albumOrder = sp.getString(KEY_ALBUM_ORDER, "")
+            .orEmpty().split(QUICK_DELIM).filter { it.isNotEmpty() },
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -74,6 +78,7 @@ class AppPrefs(context: Context) {
             putBoolean(KEY_RESUME, next.resumeReviewOnLaunch)
             putBoolean(KEY_LOCATION, next.showLocation)
             putString(KEY_QUICK, next.quickAlbums.joinToString(QUICK_DELIM))
+            putString(KEY_ALBUM_ORDER, next.albumOrder.joinToString(QUICK_DELIM))
         }
     }
 
@@ -87,6 +92,7 @@ class AppPrefs(context: Context) {
     fun setResumeReview(enabled: Boolean) = update { copy(resumeReviewOnLaunch = enabled) }
     fun setShowLocation(enabled: Boolean) = update { copy(showLocation = enabled) }
     fun setQuickAlbums(list: List<String>) = update { copy(quickAlbums = list.distinct()) }
+    fun setAlbumOrder(list: List<String>) = update { copy(albumOrder = list.distinct()) }
 
     private inline fun <reified T : Enum<T>> String?.toEnum(fallback: T): T =
         enumValues<T>().firstOrNull { it.name == this } ?: fallback
@@ -102,6 +108,7 @@ class AppPrefs(context: Context) {
         const val KEY_RESUME = "resume_review"
         const val KEY_LOCATION = "show_location"
         const val KEY_QUICK = "quick_albums"
+        const val KEY_ALBUM_ORDER = "album_order"
         const val QUICK_DELIM = "\u001f"
     }
 }

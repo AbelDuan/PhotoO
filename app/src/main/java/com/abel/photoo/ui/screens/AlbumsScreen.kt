@@ -2,6 +2,7 @@ package com.abel.photoo.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,8 +11,12 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +47,16 @@ fun AlbumsScreen(
     var renaming by remember { mutableStateOf<AlbumItem?>(null) }
     var deleting by remember { mutableStateOf<AlbumItem?>(null) }
     var actionTarget by remember { mutableStateOf<AlbumItem?>(null) }
+    var sortMode by remember { mutableStateOf(false) }
+
+    /** 上移/下移：在当前的显示顺序里交换两个相册并整体落盘。 */
+    fun reorder(from: Int, to: Int) {
+        if (from == to || to < 0 || to >= albums.size) return
+        val list = albums.toMutableList()
+        val item = list.removeAt(from)
+        list.add(to, item)
+        vm.setAlbumOrder(list.map { it.relativePath })
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -68,6 +83,13 @@ fun AlbumsScreen(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
+                Button(
+                    onClick = { sortMode = !sortMode },
+                    modifier = Modifier.padding(end = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.SwapVert, null, modifier = Modifier.padding(end = 6.dp))
+                    Text(if (sortMode) "完成" else "排序")
+                }
                 Button(onClick = { creating = true }) {
                     Icon(Icons.Rounded.Add, null, modifier = Modifier.padding(end = 6.dp))
                     Text("新建")
@@ -91,6 +113,20 @@ fun AlbumsScreen(
                 latestDate = album.latestDate,
                 onClick = { onOpenAlbum(album) },
                 onLongClick = { actionTarget = album },
+                trailing = if (sortMode) {
+                    {
+                        Row {
+                            IconButton(
+                                enabled = i > 0,
+                                onClick = { reorder(i, i - 1) },
+                            ) { Icon(Icons.Rounded.ArrowUpward, "上移") }
+                            IconButton(
+                                enabled = i < albums.lastIndex,
+                                onClick = { reorder(i, i + 1) },
+                            ) { Icon(Icons.Rounded.ArrowDownward, "下移") }
+                        }
+                    }
+                } else null,
             )
         }
     }

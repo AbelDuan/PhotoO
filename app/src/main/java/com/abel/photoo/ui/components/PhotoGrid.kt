@@ -56,6 +56,8 @@ fun PhotoThumb(
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
+        // thumbUri 在 MediaStoreSource 里已经做了回退：查不到缩略图时直接就是全图 Uri，
+        // 所以这里无需额外 error 兜底，加载路径最短。
         AsyncImage(
             model = photo.thumbUri,
             contentDescription = photo.displayName,
@@ -88,6 +90,23 @@ fun PhotoThumb(
                     .padding(5.dp)
                     .size(14.dp),
             )
+        }
+
+        if (photo.isLivePhoto) {
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 5.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    "Live",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
 
         if (selectionMode) {
@@ -210,6 +229,7 @@ fun AlbumCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
+    trailing: @Composable (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -257,18 +277,24 @@ fun AlbumCard(
                 )
             }
         }
-        Column(Modifier.padding(start = 4.dp, top = 8.dp, end = 4.dp)) {
-            Text(
-                name,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-            )
-            Text(
-                if (pending) "待建立" else "$count 张 · ${Format.friendlyDay(latestDate)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
+        Row(
+            Modifier.padding(start = 4.dp, top = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                )
+                Text(
+                    if (pending) "待建立" else "$count 张 · ${Format.friendlyDay(latestDate)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            trailing?.invoke()
         }
     }
 }

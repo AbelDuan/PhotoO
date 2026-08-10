@@ -176,8 +176,10 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     fun resetReviews() = repo.resetAllReviews()
 
     fun createAlbum(name: String) = repo.createAlbum(name)
+    fun createAlbumAndMove(name: String, ids: Collection<Long>) = repo.createAlbumAndMove(name, ids)
     fun renameAlbum(album: AlbumItem, name: String) = repo.renameAlbum(album, name)
     fun deleteEmptyAlbum(album: AlbumItem) = repo.deleteEmptyAlbum(album)
+    fun setAlbumOrder(names: List<String>) = repo.setAlbumOrder(names)
 
     fun moveToAlbum(ids: Collection<Long>, album: AlbumItem) {
         repo.moveToAlbum(ids, album)

@@ -23,6 +23,9 @@ data class PhotoItem(
     val reviewed: Boolean = false,
     val reviewAction: ReviewAction = ReviewAction.NONE,
     val favorite: Boolean = false,
+    /** Live Photo：同相册目录下存在同名 .mov/.mp4 视频。 */
+    val isLivePhoto: Boolean = false,
+    val liveVideoUri: Uri? = null,
 ) {
     val pixels: Long get() = width.toLong() * height.toLong()
 }

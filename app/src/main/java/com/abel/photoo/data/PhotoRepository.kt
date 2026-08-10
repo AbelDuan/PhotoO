@@ -166,7 +166,7 @@ class PhotoRepository(
                         pendingLocal = true,
                     )
                 }
-            _albums.value = mediaAlbums + placeholders
+            _albums.value = orderAlbums(mediaAlbums + placeholders)
 
             _stats.value = LibraryStats(
                 total = visible.size,
@@ -175,8 +175,9 @@ class PhotoRepository(
                 albums = _albums.value.size,
             )
 
-            // 图库变化后旧的分组可能已经失效，用现存哈希重算一遍（很快，不需要重新扫描）。
-            if (hashCache.isNotEmpty()) rebuildGroups()
+            // 图库变化后用已持久化的哈希重建相似分组。哈希存在本地 photo_hash 表，
+            // 这里只聚类不重算，所以下次打开直接就有相似结果、无需重新扫描整库。
+            rebuildGroups()
         } catch (e: Throwable) {
             // 任何加载异常都兜底成提示，绝不向上抛到 scope 导致进程被杀（闪退）。
             Log.e("PhotoO", "refresh failed", e)
@@ -304,7 +305,7 @@ class PhotoRepository(
                     pendingLocal = true,
                 )
             }
-        _albums.value = mediaAlbums + placeholders
+        _albums.value = orderAlbums(mediaAlbums + placeholders)
         _trash.value = trashRows.map {
             TrashItem(
                 id = it.id,
@@ -442,6 +443,50 @@ class PhotoRepository(
             refresh()
             emit("已删除空相册「${album.name}」")
         }
+    }
+
+    /**
+     * 大图页"快捷归入"里的"新建"用：建一个空相册并立刻把当前照片归入，
+     * 一步到位，不用先建再选。
+     */
+    fun createAlbumAndMove(name: String, ids: Collection<Long>) {
+        val clean = name.trim()
+        if (clean.isEmpty() || ids.isEmpty()) return
+        val idSet = ids.toHashSet()
+        val targets = _photos.value.filter { it.id in idSet }
+        if (targets.isEmpty()) return
+        scope.launch {
+            val path = MediaStoreSource.defaultPathFor(clean)
+            withContext(Dispatchers.IO) { db.addCustomAlbum(clean, path) }
+            val album = AlbumItem(
+                bucketId = -(path.hashCode().toLong().and(0xFFFFFFFFL) + 1),
+                name = clean,
+                relativePath = path,
+                count = 0,
+                coverUri = null,
+                latestDate = 0L,
+                pendingLocal = true,
+            )
+            moveToAlbum(ids, album)
+        }
+    }
+
+    /** 设置相册展示顺序（按 relativePath）。 */
+    fun setAlbumOrder(names: List<String>) {
+        prefs.setAlbumOrder(names)
+        scope.launch { recomputeDerived() }
+    }
+
+    /** 按用户在设置/相册页排好的顺序展示，没排过的按时间落到末尾。 */
+    private fun orderAlbums(albums: List<AlbumItem>): List<AlbumItem> {
+        val order = prefs.current.albumOrder
+        if (order.isEmpty()) return albums
+        return albums.sortedWith(
+            compareBy<AlbumItem> { idx ->
+                val i = order.indexOf(idx.relativePath)
+                if (i < 0) Int.MAX_VALUE else i
+            }.thenByDescending { it.latestDate }
+        )
     }
 
     /**

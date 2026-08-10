@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.abel.photoo.model.AlbumItem
+import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.components.AlbumPickerSheet
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
@@ -154,6 +155,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var confirmTrashSelection by remember { mutableStateOf(false) }
+    var quickCreate by remember { mutableStateOf<PhotoItem?>(null) }
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -349,6 +351,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onMoveToAlbum = { pickerTargets = listOf(it.id) },
                     quickAlbums = vm.prefs.current.quickAlbums,
                     onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
+                    onCreateQuickAlbum = { photo -> quickCreate = photo },
                 )
             }
         }
@@ -361,6 +364,16 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     }
 
     NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
+
+    quickCreate?.let { photo ->
+        TextInputDialog(
+            title = "新建并归入",
+            label = "相册名称",
+            confirmText = "创建并归入",
+            onConfirm = { vm.createAlbumAndMove(it, listOf(photo.id)) },
+            onDismiss = { quickCreate = null },
+        )
+    }
 
     if (confirmTrashSelection) {
         ConfirmDialog(
@@ -477,6 +490,8 @@ private fun BarAction(
 private fun requiredPermissions(): Array<String> = buildList {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.READ_MEDIA_IMAGES)
+        // Live Photo 需要读取同目录同名视频，权限一起申请；未授予时自动降级为不可识别。
+        add(Manifest.permission.READ_MEDIA_VIDEO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
         }

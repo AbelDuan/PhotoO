@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.BackHandler
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,13 +32,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +63,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import android.media.MediaPlayer
+import android.widget.VideoView
 import com.abel.photoo.model.ExifInfo
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.components.ZoomableImage
@@ -84,6 +91,7 @@ fun ViewerScreen(
     onMoveToAlbum: (PhotoItem) -> Unit,
     quickAlbums: List<String> = emptyList(),
     onMoveToQuickAlbum: (PhotoItem, String) -> Unit = { _, _ -> },
+    onCreateQuickAlbum: (PhotoItem) -> Unit = { _ -> },
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -100,11 +108,14 @@ fun ViewerScreen(
     var chromeVisible by remember { mutableStateOf(true) }
     var infoVisible by remember { mutableStateOf(false) }
     var zoomed by remember { mutableStateOf(false) }
+    var livePlaying by remember { mutableStateOf(false) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
     // 翻到哪张就解析哪张的 EXIF，不做全量预解析 —— 大图库上那会非常慢。
+    // 相邻页的预载交给 HorizontalPager(beyondViewportPageCount=1)，这里只负责复位 Live 播放态。
     LaunchedEffect(pagerState, photos) {
+        livePlaying = false
         snapshotFlow { pagerState.currentPage }.collect { page ->
             photos.getOrNull(page)?.let(onRequestExif)
         }
@@ -126,6 +137,7 @@ fun ViewerScreen(
                 model = photo.uri,
                 contentDescription = photo.displayName,
                 resetKey = photo.id,
+                thumbModel = photo.thumbUri,
                 onTap = { chromeVisible = !chromeVisible },
                 onSwipeUp = { onTrash(photo) },
                 onSwipeDown = onClose,
@@ -160,6 +172,7 @@ fun ViewerScreen(
                     QuickAlbumBar(
                         albums = quickAlbums,
                         onPick = { onMoveToQuickAlbum(current, it) },
+                        onCreate = { current?.let(onCreateQuickAlbum) },
                     )
                 }
                 ViewerBottomBar(
@@ -168,6 +181,7 @@ fun ViewerScreen(
                     onMove = { current?.let(onMoveToAlbum) },
                     onDelete = { current?.let(onTrash) },
                     onInfo = { infoVisible = true },
+                    onPlayLive = if (current?.isLivePhoto == true) ({ livePlaying = true }) else null,
                 )
             }
         }
@@ -183,6 +197,18 @@ fun ViewerScreen(
                 info = current?.let { exif[it.id] },
                 onClose = { infoVisible = false },
             )
+        }
+
+        // Live Photo 全屏播放覆盖层。
+        AnimatedVisibility(
+            visible = livePlaying && current?.liveVideoUri != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            current?.liveVideoUri?.let { uri ->
+                LivePhotoPlayer(uri = uri, onClose = { livePlaying = false })
+            }
         }
     }
 }
@@ -238,6 +264,7 @@ private fun ViewerBottomBar(
     onMove: () -> Unit,
     onDelete: () -> Unit,
     onInfo: () -> Unit,
+    onPlayLive: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -260,6 +287,9 @@ private fun ViewerBottomBar(
         )
         ViewerAction(Icons.Rounded.Folder, "归入相册", onMove)
         ViewerAction(Icons.Rounded.Info, "信息", onInfo)
+        if (onPlayLive != null) {
+            ViewerAction(Icons.Rounded.PlayArrow, "Live", onPlayLive)
+        }
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
     }
 }
@@ -268,6 +298,7 @@ private fun ViewerBottomBar(
 private fun QuickAlbumBar(
     albums: List<String>,
     onPick: (String) -> Unit,
+    onCreate: () -> Unit = {},
 ) {
     LazyRow(
         Modifier
@@ -275,6 +306,20 @@ private fun QuickAlbumBar(
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item {
+            FilterChip(
+                selected = false,
+                onClick = onCreate,
+                label = { Text("+ 新建", style = MaterialTheme.typography.labelSmall) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+            )
+        }
         items(albums) { name ->
             FilterChip(
                 selected = false,
@@ -288,6 +333,38 @@ private fun QuickAlbumBar(
                     )
                 },
             )
+        }
+    }
+}
+
+/** Live Photo 播放：用系统 VideoView 直接播同名短视频，全屏覆盖。 */
+@Composable
+private fun LivePhotoPlayer(uri: Uri, onClose: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    setVideoURI(uri)
+                    setOnPreparedListener { mp: MediaPlayer ->
+                        mp.isLooping = true
+                        start()
+                    }
+                    setOnErrorListener { _, _, _ -> true }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(12.dp),
+        ) {
+            Icon(Icons.Rounded.Close, "关闭", tint = Color.White)
         }
     }
 }

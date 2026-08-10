@@ -48,6 +48,8 @@ fun ZoomableImage(
     onZoomChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     resetKey: Any? = null,
+    /** 预览用缩略图：先以它秒出画面，全图加载完成后叠在上面淡入，翻页不再空等。 */
+    thumbModel: Any? = null,
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -174,10 +176,7 @@ fun ZoomableImage(
                 }
             },
     ) {
-        AsyncImage(
-            model = model,
-            contentDescription = contentDescription,
-            contentScale = ContentScale.Fit,
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
@@ -187,7 +186,22 @@ fun ZoomableImage(
                     translationY = offset.y + displayY
                     alpha = dragAlpha
                 },
-        )
+        ) {
+            if (thumbModel != null) {
+                AsyncImage(
+                    model = thumbModel,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            AsyncImage(
+                model = model,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
