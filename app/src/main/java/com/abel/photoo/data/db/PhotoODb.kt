@@ -100,6 +100,8 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+
+        db.execSQL(GEO_TABLE_SQL)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -115,6 +117,9 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
                 )
                 """.trimIndent()
             )
+        }
+        if (oldVersion < 3) {
+            db.execSQL(GEO_TABLE_SQL)
         }
     }
 
@@ -455,6 +460,59 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    // ------------------------------------------------------------- 拍摄坐标
+
+    /**
+     * 一条 GPS 记录。[located] = 0 表示"扫过了但这张没有坐标"，
+     * 记下来是为了避免每次启动都重复解析同一批无坐标的照片。
+     */
+    data class GeoRow(
+        val id: Long,
+        val lat: Double,
+        val lon: Double,
+        val located: Boolean,
+    )
+
+    fun loadGeoMap(): Map<Long, GeoRow> {
+        val out = HashMap<Long, GeoRow>()
+        readableDatabase.rawQuery(
+            "SELECT media_id, lat, lon, located FROM photo_geo", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                out[c.getLong(0)] = GeoRow(
+                    id = c.getLong(0),
+                    lat = c.getDouble(1),
+                    lon = c.getDouble(2),
+                    located = c.getInt(3) == 1,
+                )
+            }
+        }
+        return out
+    }
+
+    fun putGeoBatch(rows: Collection<GeoRow>) {
+        if (rows.isEmpty()) return
+        writableDatabase.transaction { db ->
+            rows.forEach { r ->
+                db.insertWithOnConflict(
+                    "photo_geo",
+                    null,
+                    ContentValues().apply {
+                        put("media_id", r.id)
+                        put("lat", r.lat)
+                        put("lon", r.lon)
+                        put("located", if (r.located) 1 else 0)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+        }
+    }
+
+    fun clearGeo() {
+        writableDatabase.execSQL("DELETE FROM photo_geo")
+    }
+
     // ------------------------------------------------------------------ 工具
 
     private inline fun SQLiteDatabase.transaction(block: (SQLiteDatabase) -> Unit) {
@@ -472,6 +530,16 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "photoo.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
+
+        /** onCreate 与 onUpgrade 共用同一份建表语句，避免两边写歪了。 */
+        private val GEO_TABLE_SQL = """
+            CREATE TABLE IF NOT EXISTS photo_geo (
+                media_id  INTEGER PRIMARY KEY,
+                lat       REAL    NOT NULL DEFAULT 0,
+                lon       REAL    NOT NULL DEFAULT 0,
+                located   INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent()
     }
 }

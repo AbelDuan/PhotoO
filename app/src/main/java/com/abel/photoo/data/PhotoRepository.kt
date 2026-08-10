@@ -9,9 +9,12 @@ import com.abel.photoo.data.media.MediaOps
 import com.abel.photoo.data.media.MediaRequestBroker
 import com.abel.photoo.data.media.MediaStoreSource
 import com.abel.photoo.data.prefs.AppPrefs
+import com.abel.photoo.data.geo.CoordTransform
 import com.abel.photoo.data.similar.PerceptualHash
 import com.abel.photoo.data.similar.SimilarityEngine
 import com.abel.photoo.model.AlbumItem
+import com.abel.photoo.model.GeoPoint
+import com.abel.photoo.model.GeoScanState
 import com.abel.photoo.model.KeepStrategy
 import com.abel.photoo.model.LibraryStats
 import com.abel.photoo.model.OpResult
@@ -87,6 +90,14 @@ class PhotoRepository(
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    private val _geoPoints = MutableStateFlow<List<GeoPoint>>(emptyList())
+    val geoPoints: StateFlow<List<GeoPoint>> = _geoPoints.asStateFlow()
+
+    private val _geoScanState = MutableStateFlow<GeoScanState>(GeoScanState.Idle)
+    val geoScanState: StateFlow<GeoScanState> = _geoScanState.asStateFlow()
+
+    private var geoScanning = false
 
     private val _messages = MutableSharedFlow<String>(
         replay = 0, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -563,6 +574,75 @@ class PhotoRepository(
             }
         }
     }
+
+    // ------------------------------------------------------------ 拍摄坐标
+
+    /**
+     * 后台扫描 EXIF 里的 GPS 坐标，供地图页使用。
+     *
+     * 与 Live 扫描同样的思路：结果（含"这张没有坐标"）一律落库，
+     * 下次启动只处理新增照片，避免每次开图库都把上万张 EXIF 重读一遍。
+     * 不做反地理编码——那要走系统 Geocoder、很慢，交给地图页对可见的簇按需解析。
+     */
+    fun scanGeo(force: Boolean = false) {
+        if (geoScanning) return
+        geoScanning = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                if (force) db.clearGeo()
+                val known = if (force) emptyMap() else db.loadGeoMap()
+                val all = _photos.value
+                // 先把已知结果推上去，界面立刻有内容，不用等这轮扫描跑完。
+                publishGeo(known.values.filter { it.located })
+
+                val todo = all.filter { it.id !in known }
+                if (todo.isEmpty()) {
+                    _geoScanState.value = GeoScanState.Done(known.values.count { it.located })
+                    return@launch
+                }
+
+                var done = 0
+                val collected = known.values.filter { it.located }.toMutableList()
+                todo.chunked(50).forEach { chunk ->
+                    if (!isActive) return@launch
+                    val rows = chunk.map { photo ->
+                        val info = runCatching {
+                            exif.read(photo.id, photo.uri, resolvePlace = false)
+                        }.getOrNull()
+                        val lat = info?.latitude
+                        val lon = info?.longitude
+                        val ok = lat != null && lon != null && CoordTransform.isValid(lat, lon)
+                        PhotoODb.GeoRow(
+                            id = photo.id,
+                            lat = if (ok) lat!! else 0.0,
+                            lon = if (ok) lon!! else 0.0,
+                            located = ok,
+                        )
+                    }
+                    db.putGeoBatch(rows)
+                    collected += rows.filter { it.located }
+                    done += chunk.size
+                    _geoScanState.value = GeoScanState.Running(done, todo.size)
+                    publishGeo(collected)
+                    kotlinx.coroutines.yield()
+                }
+                _geoScanState.value = GeoScanState.Done(collected.size)
+            } catch (e: Throwable) {
+                Log.w("PhotoO", "scanGeo failed", e)
+                _geoScanState.value = GeoScanState.Idle
+            } finally {
+                geoScanning = false
+            }
+        }
+    }
+
+    private fun publishGeo(rows: Collection<PhotoODb.GeoRow>) {
+        _geoPoints.value = rows.map { GeoPoint(it.id, it.lat, it.lon) }
+    }
+
+    /** 地图页按需解析某个簇的地名，结果走 ExifReader 自己的缓存。 */
+    suspend fun placeOf(lat: Double, lon: Double, sampleId: Long, sampleUri: Uri): String? =
+        runCatching { exif.read(sampleId, sampleUri, resolvePlace = true).place }.getOrNull()
 
     /**
      * 解析某张 Live Photo 的可播放视频 Uri。

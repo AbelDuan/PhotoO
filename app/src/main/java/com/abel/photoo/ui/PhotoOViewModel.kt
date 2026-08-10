@@ -9,6 +9,9 @@ import androidx.lifecycle.viewModelScope
 import com.abel.photoo.PhotoOApp
 import com.abel.photoo.model.AlbumItem
 import com.abel.photoo.model.ExifInfo
+import com.abel.photoo.model.GestureAction
+import com.abel.photoo.model.GestureDirection
+import com.abel.photoo.model.GestureSensitivity
 import com.abel.photoo.model.KeepStrategy
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.ReviewAction
@@ -44,6 +47,21 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     val loading = repo.loading
     val messages = repo.messages
     val settings = prefs.settings
+    val geoPoints = repo.geoPoints
+    val geoScanState = repo.geoScanState
+
+    /**
+     * Live Photo 是否静音。
+     *
+     * 刻意不落盘：需求是"每次打开应用第一次播放都默认静音"，
+     * 所以它的生命周期就应该跟着进程走 —— ViewModel 活多久它活多久。
+     */
+    private val _liveMuted = MutableStateFlow(true)
+    val liveMuted: StateFlow<Boolean> = _liveMuted.asStateFlow()
+
+    fun setLiveMuted(muted: Boolean) {
+        _liveMuted.value = muted
+    }
 
     /** 多选集合。空集合代表当前不处于多选模式。 */
     private val _selection = MutableStateFlow<Set<Long>>(emptySet())
@@ -209,6 +227,20 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     fun setAlsoSystemTrash(on: Boolean) = prefs.setAlsoSystemTrash(on)
     fun setResumeReview(on: Boolean) = prefs.setResumeReview(on)
     fun setShowLocation(on: Boolean) = prefs.setShowLocation(on)
+
+    // ------------------------------------------------------------------ 手势
+
+    fun setGesture(dir: GestureDirection, action: GestureAction) = prefs.setGesture(dir, action)
+    fun setGestureSensitivity(s: GestureSensitivity) = prefs.setGestureSensitivity(s)
+    fun resetGestures() = prefs.resetGestures()
+
+    // ------------------------------------------------------- Live Photo / 地图
+
+    fun setLiveAutoPlay(on: Boolean) = prefs.setLiveAutoPlay(on)
+    fun setTencentMapKey(key: String) = prefs.setTencentMapKey(key)
+
+    /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
+    fun scanGeo(force: Boolean = false) = repo.scanGeo(force)
 
     fun setKeepStrategy(s: KeepStrategy) {
         prefs.setKeepStrategy(s)

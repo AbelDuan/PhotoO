@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.abel.photoo.model.GestureDirection
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.EmptyState
@@ -129,11 +130,20 @@ fun ReviewScreen(
                 contentDescription = photo.displayName,
                 resetKey = photo.id,
                 onTap = {},
-                onSwipeUp = {
-                    vm.moveToTrash(listOf(photo.id))
-                    advance()
+                // 整理模式的手势是固定语义（上滑删、下滑退），不跟设置里的自定义走，
+                // 否则"整理"这个流程本身就没法保证一致的肌肉记忆了。
+                sensitivity = vm.prefs.current.gestureSensitivity.factor,
+                onSwipe = { dir ->
+                    when (dir) {
+                        GestureDirection.UP -> {
+                            vm.moveToTrash(listOf(photo.id))
+                            advance()
+                        }
+                        GestureDirection.DOWN -> onExit()
+                        else -> Unit
+                    }
                 },
-                onSwipeDown = onExit,
+                flyOut = { true },
                 onZoomChanged = { if (page == pagerState.currentPage) zoomed = it },
             )
         }

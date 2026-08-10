@@ -173,6 +173,73 @@ sealed interface OpResult {
     data class Failure(val message: String) : OpResult
 }
 
+// ------------------------------------------------------------------ 手势
+
+/** 大图页一个滑动方向可以绑定的动作。 */
+enum class GestureAction(val label: String) {
+    NONE("不响应"),
+    CLOSE("退出查看"),
+    TRASH("移入回收站"),
+    FAVORITE("收藏 / 取消"),
+    MOVE_ALBUM("归入相册"),
+    INFO("照片信息"),
+    KEEP("标记已看"),
+    NEXT("下一张"),
+    PREV("上一张"),
+}
+
+/** 四个方向。用枚举而不是四个字段，设置页可以直接遍历渲染。 */
+enum class GestureDirection(val label: String, val default: GestureAction) {
+    UP("上滑", GestureAction.TRASH),
+    DOWN("下滑", GestureAction.CLOSE),
+    LEFT("左滑", GestureAction.NEXT),
+    RIGHT("右滑", GestureAction.PREV),
+}
+
+/**
+ * 手势灵敏度。数值是"触发所需位移占屏幕高度的比例"的缩放系数：
+ * 系数越大越灵敏（阈值越小），轻轻一划就触发。
+ */
+enum class GestureSensitivity(val label: String, val factor: Float) {
+    VERY_LOW("很迟钝", 0.55f),
+    LOW("偏迟钝", 0.75f),
+    NORMAL("标准", 1.0f),
+    HIGH("偏灵敏", 1.4f),
+    VERY_HIGH("很灵敏", 2.0f),
+}
+
+// ------------------------------------------------------------------ 地理
+
+/** 一张照片的拍摄坐标（WGS-84，来自 EXIF）。 */
+data class GeoPoint(
+    val id: Long,
+    val lat: Double,
+    val lon: Double,
+)
+
+/** 地图上的一个聚合点：地理位置相近的一批照片。 */
+data class GeoCluster(
+    val key: String,
+    /** 簇中心（WGS-84） */
+    val lat: Double,
+    val lon: Double,
+    val photos: List<PhotoItem>,
+    /** 反地理编码得到的地名，可能还没解析出来 */
+    val place: String? = null,
+) {
+    val count: Int get() = photos.size
+    val cover: PhotoItem? get() = photos.maxByOrNull { it.dateTaken }
+    val latestDate: Long get() = photos.maxOfOrNull { it.dateTaken } ?: 0L
+    val earliestDate: Long get() = photos.minOfOrNull { it.dateTaken } ?: 0L
+}
+
+/** GPS 扫描进度。 */
+sealed interface GeoScanState {
+    data object Idle : GeoScanState
+    data class Running(val done: Int, val total: Int) : GeoScanState
+    data class Done(val located: Int) : GeoScanState
+}
+
 /** 时间线的分组粒度。 */
 enum class TimelineGrouping(val label: String) {
     DAY("按日"),

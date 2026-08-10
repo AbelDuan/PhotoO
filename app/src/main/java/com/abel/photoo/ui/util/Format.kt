@@ -49,6 +49,18 @@ object Format {
 
     fun dayTitle(millis: Long): String = dayFmt.format(millis)
 
+    /** 地图页兜底展示：地名还没解析出来时先给经纬度。 */
+    fun latLon(lat: Double, lon: Double): String =
+        String.format(Locale.CHINA, "%.5f, %.5f", lat, lon)
+
+    /** "2024年3月12日" 或 "2024年3月12日 – 2024年4月2日"。 */
+    fun dayRange(from: Long, to: Long): String {
+        if (from <= 0 && to <= 0) return "未知时间"
+        val a = dayFmt.format(if (from > 0) from else to)
+        val b = dayFmt.format(if (to > 0) to else from)
+        return if (a == b) a else "$a – $b"
+    }
+
     /** "今天 / 昨天 / 3月12日 星期二" 这种人话标题。 */
     fun friendlyDay(millis: Long): String {
         val now = Calendar.getInstance()

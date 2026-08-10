@@ -2,6 +2,9 @@ package com.abel.photoo.data.prefs
 
 import android.content.Context
 import androidx.core.content.edit
+import com.abel.photoo.model.GestureAction
+import com.abel.photoo.model.GestureDirection
+import com.abel.photoo.model.GestureSensitivity
 import com.abel.photoo.model.KeepStrategy
 import com.abel.photoo.model.SimilarityLevel
 import com.abel.photoo.model.TimelineGrouping
@@ -32,7 +35,26 @@ data class Settings(
     val quickAlbums: List<String> = emptyList(),
     /** 相册展示顺序：按 relativePath 排序，列表里没有的落到末尾按时间排。 */
     val albumOrder: List<String> = emptyList(),
-)
+    /** 大图页四个滑动方向各自绑定的动作。 */
+    val gestures: Map<GestureDirection, GestureAction> =
+        GestureDirection.entries.associateWith { it.default },
+    /** 手势灵敏度。 */
+    val gestureSensitivity: GestureSensitivity = GestureSensitivity.NORMAL,
+    /** 打开 Live Photo 时自动播放。 */
+    val liveAutoPlay: Boolean = true,
+    /**
+     * 腾讯位置服务 JavaScript API GL 的 key，用于地图页真实底图。
+     * 应用不内置任何 key，需要用户自行到腾讯位置服务开放平台申请后填入。
+     */
+    val tencentMapKey: String = "",
+) {
+    fun gesture(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
+
+    /** 左右是否维持"翻页"语义。是的话就让 Pager 自己处理，手感最好。 */
+    val horizontalIsPaging: Boolean
+        get() = gesture(GestureDirection.LEFT) == GestureAction.NEXT &&
+            gesture(GestureDirection.RIGHT) == GestureAction.PREV
+}
 
 /**
  * 轻量设置存储。只有十来个标量，SharedPreferences 足够，
@@ -62,6 +84,12 @@ class AppPrefs(context: Context) {
             .orEmpty().split(QUICK_DELIM).filter { it.isNotEmpty() },
         albumOrder = sp.getString(KEY_ALBUM_ORDER, "")
             .orEmpty().split(QUICK_DELIM).filter { it.isNotEmpty() },
+        gestures = GestureDirection.entries.associateWith { dir ->
+            sp.getString(KEY_GESTURE_PREFIX + dir.name, null).toEnum(dir.default)
+        },
+        gestureSensitivity = sp.getString(KEY_SENSITIVITY, null).toEnum(GestureSensitivity.NORMAL),
+        liveAutoPlay = sp.getBoolean(KEY_LIVE_AUTO, true),
+        tencentMapKey = sp.getString(KEY_MAP_KEY, "").orEmpty(),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -79,6 +107,12 @@ class AppPrefs(context: Context) {
             putBoolean(KEY_LOCATION, next.showLocation)
             putString(KEY_QUICK, next.quickAlbums.joinToString(QUICK_DELIM))
             putString(KEY_ALBUM_ORDER, next.albumOrder.joinToString(QUICK_DELIM))
+            GestureDirection.entries.forEach { dir ->
+                putString(KEY_GESTURE_PREFIX + dir.name, next.gesture(dir).name)
+            }
+            putString(KEY_SENSITIVITY, next.gestureSensitivity.name)
+            putBoolean(KEY_LIVE_AUTO, next.liveAutoPlay)
+            putString(KEY_MAP_KEY, next.tencentMapKey)
         }
     }
 
@@ -93,6 +127,20 @@ class AppPrefs(context: Context) {
     fun setShowLocation(enabled: Boolean) = update { copy(showLocation = enabled) }
     fun setQuickAlbums(list: List<String>) = update { copy(quickAlbums = list.distinct()) }
     fun setAlbumOrder(list: List<String>) = update { copy(albumOrder = list.distinct()) }
+
+    fun setGesture(dir: GestureDirection, action: GestureAction) =
+        update { copy(gestures = gestures + (dir to action)) }
+
+    fun setGestureSensitivity(s: GestureSensitivity) = update { copy(gestureSensitivity = s) }
+    fun setLiveAutoPlay(on: Boolean) = update { copy(liveAutoPlay = on) }
+    fun setTencentMapKey(key: String) = update { copy(tencentMapKey = key.trim()) }
+
+    fun resetGestures() = update {
+        copy(
+            gestures = GestureDirection.entries.associateWith { it.default },
+            gestureSensitivity = GestureSensitivity.NORMAL,
+        )
+    }
 
     private inline fun <reified T : Enum<T>> String?.toEnum(fallback: T): T =
         enumValues<T>().firstOrNull { it.name == this } ?: fallback
@@ -109,6 +157,10 @@ class AppPrefs(context: Context) {
         const val KEY_LOCATION = "show_location"
         const val KEY_QUICK = "quick_albums"
         const val KEY_ALBUM_ORDER = "album_order"
+        const val KEY_GESTURE_PREFIX = "gesture_"
+        const val KEY_SENSITIVITY = "gesture_sensitivity"
+        const val KEY_LIVE_AUTO = "live_auto_play"
+        const val KEY_MAP_KEY = "tencent_map_key"
         const val QUICK_DELIM = "\u001f"
     }
 }

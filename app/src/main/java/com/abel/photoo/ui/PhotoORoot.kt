@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
@@ -82,6 +83,7 @@ import com.abel.photoo.ui.components.EmptyState
 import com.abel.photoo.ui.components.TextInputDialog
 import com.abel.photoo.ui.screens.AlbumDetailScreen
 import com.abel.photoo.ui.screens.AlbumsScreen
+import com.abel.photoo.ui.screens.MapScreen
 import com.abel.photoo.ui.screens.ReviewScreen
 import com.abel.photoo.ui.screens.SettingsScreen
 import com.abel.photoo.ui.screens.SimilarScreen
@@ -89,10 +91,11 @@ import com.abel.photoo.ui.screens.TimelineScreen
 import com.abel.photoo.ui.screens.TrashScreen
 import com.abel.photoo.ui.screens.ViewerScreen
 
-/** 底部四个主 Tab。 */
+/** 底部主 Tab。 */
 private enum class Tab(val label: String, val icon: ImageVector) {
     TIMELINE("时间线", Icons.Rounded.Photo),
     ALBUMS("相册", Icons.Rounded.Folder),
+    MAP("地图", Icons.Rounded.Map),
     SIMILAR("相似", Icons.Rounded.ContentCopy),
     SETTINGS("设置", Icons.Rounded.Settings),
 }
@@ -145,6 +148,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val stats by vm.stats.collectAsStateWithLifecycle()
     val exif by vm.exifCache.collectAsStateWithLifecycle()
+    val liveMuted by vm.liveMuted.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TIMELINE) }
     var albumDetail by remember { mutableStateOf<AlbumItem?>(null) }
@@ -213,6 +217,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                             when (tab) {
                                 Tab.TIMELINE -> "PhotoO"
                                 Tab.ALBUMS -> "相册"
+                                Tab.MAP -> "地图分布"
                                 Tab.SIMILAR -> "相似照片"
                                 Tab.SETTINGS -> "设置"
                             },
@@ -265,6 +270,14 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     vm = vm,
                     contentPadding = inner,
                     onOpenAlbum = { albumDetail = it },
+                )
+
+                Tab.MAP -> MapScreen(
+                    vm = vm,
+                    contentPadding = inner,
+                    onOpenPhoto = { list, photo ->
+                        viewer = ViewerRequest(list.map { it.id }, photo.id)
+                    },
                 )
 
                 Tab.SIMILAR -> SimilarScreen(
@@ -349,10 +362,19 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onTrash = { vm.moveToTrash(listOf(it.id)) },
                     onToggleFavorite = { vm.toggleFavorite(it.id) },
                     onMoveToAlbum = { pickerTargets = listOf(it.id) },
-                    quickAlbums = vm.prefs.current.quickAlbums,
+                    quickAlbums = settings.quickAlbums,
                     onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
                     onCreateQuickAlbum = { photo -> quickCreate = photo },
                     onResolveLiveVideo = { vm.resolveLiveVideo(it) },
+                    // 同名相册可能对应多个目录（小米的"截图"就是），按名字去重再给大图页。
+                    allAlbums = remember(albums) { albums.map { it.name }.distinct() },
+                    onSetQuickAlbums = vm::setQuickAlbums,
+                    onMarkKept = { vm.markKept(listOf(it.id)) },
+                    gestures = settings.gestures,
+                    sensitivity = settings.gestureSensitivity.factor,
+                    liveAutoPlay = settings.liveAutoPlay,
+                    liveMuted = liveMuted,
+                    onSetLiveMuted = vm::setLiveMuted,
                 )
             }
         }

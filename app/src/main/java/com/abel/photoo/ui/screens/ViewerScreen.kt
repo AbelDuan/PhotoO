@@ -7,12 +7,14 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.BackHandler
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,7 +23,9 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -31,6 +35,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
@@ -43,14 +49,19 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,13 +73,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.media.MediaPlayer
 import android.widget.VideoView
 import com.abel.photoo.model.ExifInfo
+import com.abel.photoo.model.GestureAction
+import com.abel.photoo.model.GestureDirection
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.components.ZoomableImage
 import com.abel.photoo.ui.util.Format
@@ -76,10 +92,13 @@ import com.abel.photoo.ui.util.Format
 /**
  * 全屏大图查看器。
  *
- * 交互约定：
+ * 四个滑动方向绑定的动作可以在设置里改，默认：
  *   左右滑 → 切换照片      上滑 → 移入回收站
  *   下滑   → 退出          单击 → 显隐工具栏
  *   双击 / 双指 → 缩放
+ *
+ * Live Photo 打开即自动播放（可关），首次播放默认静音，画面左上角有微信同款的
+ * LIVE 徽标，点一下可以停 / 播，旁边是声音开关。
  */
 @Composable
 fun ViewerScreen(
@@ -96,6 +115,17 @@ fun ViewerScreen(
     onCreateQuickAlbum: (PhotoItem) -> Unit = { _ -> },
     /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取）。 */
     onResolveLiveVideo: suspend (PhotoItem) -> Uri? = { null },
+    /** 图库里全部相册名，供大图页直接勾选常用文件夹。 */
+    allAlbums: List<String> = emptyList(),
+    onSetQuickAlbums: (List<String>) -> Unit = {},
+    onMarkKept: (PhotoItem) -> Unit = {},
+    /** 四个方向各自绑定的动作。 */
+    gestures: Map<GestureDirection, GestureAction> = emptyMap(),
+    /** 手势灵敏度系数。 */
+    sensitivity: Float = 1f,
+    liveAutoPlay: Boolean = true,
+    liveMuted: Boolean = true,
+    onSetLiveMuted: (Boolean) -> Unit = {},
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -111,6 +141,7 @@ fun ViewerScreen(
     )
     var chromeVisible by remember { mutableStateOf(true) }
     var infoVisible by remember { mutableStateOf(false) }
+    var quickPickerVisible by remember { mutableStateOf(false) }
     var zoomed by remember { mutableStateOf(false) }
     var livePlaying by remember { mutableStateOf(false) }
     var liveUri by remember { mutableStateOf<Uri?>(null) }
@@ -118,13 +149,75 @@ fun ViewerScreen(
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
+    fun actionOf(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
+
+    // 左右都还是"翻页"时交给 Pager 自己滚，跟手感受最好；
+    // 一旦用户把左右改成了别的动作，就关掉 Pager 滚动、由手势层接管。
+    val horizontalIsPaging =
+        actionOf(GestureDirection.LEFT) == GestureAction.NEXT &&
+            actionOf(GestureDirection.RIGHT) == GestureAction.PREV
+
+    fun goPage(delta: Int) {
+        val target = (pagerState.currentPage + delta).coerceIn(0, photos.lastIndex)
+        if (target != pagerState.currentPage) {
+            scope.launch { pagerState.animateScrollToPage(target) }
+        }
+    }
+
+    fun runAction(action: GestureAction, photo: PhotoItem) {
+        when (action) {
+            GestureAction.NONE -> Unit
+            GestureAction.CLOSE -> onClose()
+            GestureAction.TRASH -> onTrash(photo)
+            GestureAction.FAVORITE -> onToggleFavorite(photo)
+            GestureAction.MOVE_ALBUM -> onMoveToAlbum(photo)
+            GestureAction.INFO -> infoVisible = true
+            GestureAction.KEEP -> onMarkKept(photo)
+            GestureAction.NEXT -> goPage(1)
+            GestureAction.PREV -> goPage(-1)
+        }
+    }
+
     // 翻到哪张就解析哪张的 EXIF，不做全量预解析 —— 大图库上那会非常慢。
-    // 相邻页的预载交给 HorizontalPager(beyondViewportPageCount=1)，这里只负责复位 Live 播放态。
+    // 相邻页的预载交给 HorizontalPager(beyondViewportPageCount=1)。
     LaunchedEffect(pagerState, photos) {
-        livePlaying = false
-        liveUri = null
         snapshotFlow { pagerState.currentPage }.collect { page ->
             photos.getOrNull(page)?.let(onRequestExif)
+        }
+    }
+
+    // Live 自动播放：切到哪张就解析哪张，非 Live 或关掉自动播放时直接清空。
+    LaunchedEffect(current?.id, liveAutoPlay) {
+        livePlaying = false
+        liveUri = null
+        val photo = current ?: return@LaunchedEffect
+        if (!photo.isLivePhoto || !liveAutoPlay) return@LaunchedEffect
+        val uri = onResolveLiveVideo(photo)
+        // 解析是异步的，回来时用户可能已经翻页了，要再确认一次。
+        if (uri != null && current?.id == photo.id) {
+            liveUri = uri
+            livePlaying = true
+        }
+    }
+
+    fun toggleLive() {
+        val photo = current ?: return
+        if (!photo.isLivePhoto) return
+        if (livePlaying) {
+            livePlaying = false
+            return
+        }
+        val cached = liveUri
+        if (cached != null) {
+            livePlaying = true
+            return
+        }
+        scope.launch {
+            val uri = onResolveLiveVideo(photo)
+            if (uri != null && current?.id == photo.id) {
+                liveUri = uri
+                livePlaying = true
+            }
         }
     }
 
@@ -135,20 +228,37 @@ fun ViewerScreen(
     ) {
         HorizontalPager(
             state = pagerState,
-            userScrollEnabled = !zoomed,
+            userScrollEnabled = horizontalIsPaging && !zoomed,
             beyondViewportPageCount = 1,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
             val photo = photos[page]
+            val isCurrent = page == pagerState.currentPage
             ZoomableImage(
                 model = photo.uri,
                 contentDescription = photo.displayName,
                 resetKey = photo.id,
                 thumbModel = photo.thumbUri,
+                sensitivity = sensitivity,
+                horizontalEnabled = !horizontalIsPaging,
                 onTap = { chromeVisible = !chromeVisible },
-                onSwipeUp = { onTrash(photo) },
-                onSwipeDown = onClose,
-                onZoomChanged = { if (page == pagerState.currentPage) zoomed = it },
+                onSwipe = { dir ->
+                    // 滑动会翻页或关闭，先把正在播的 Live 停掉，免得声音跟着跑。
+                    livePlaying = false
+                    runAction(actionOf(dir), photo)
+                },
+                flyOut = { dir ->
+                    // 只有"删除 / 退出"这类动作值得整张图飞出去；翻页飞出反而奇怪。
+                    actionOf(dir) == GestureAction.TRASH || actionOf(dir) == GestureAction.CLOSE
+                },
+                onZoomChanged = { if (isCurrent) zoomed = it },
+                overlay = if (isCurrent && livePlaying && liveUri != null) {
+                    {
+                        key(liveUri) {
+                            LiveVideoLayer(uri = liveUri!!, muted = liveMuted)
+                        }
+                    }
+                } else null,
             )
         }
 
@@ -167,19 +277,34 @@ fun ViewerScreen(
             )
         }
 
+        // 微信同款 LIVE 徽标：贴在画面左上角，点一下停 / 播，旁边是声音开关。
+        if (current?.isLivePhoto == true) {
+            LiveBadge(
+                playing = livePlaying,
+                muted = liveMuted,
+                onToggle = ::toggleLive,
+                onToggleMute = { onSetLiveMuted(!liveMuted) },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(start = 14.dp, top = 62.dp),
+            )
+        }
+
         AnimatedVisibility(
-            visible = chromeVisible && !infoVisible,
+            visible = chromeVisible && !infoVisible && !quickPickerVisible,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 // 快捷归入：常看的那几个文件夹这里点一下就归，不用每次走相册选择器。
-                if (quickAlbums.isNotEmpty() && current != null) {
+                if (current != null) {
                     QuickAlbumBar(
                         albums = quickAlbums,
                         onPick = { onMoveToQuickAlbum(current, it) },
-                        onCreate = { current?.let(onCreateQuickAlbum) },
+                        onCreate = { onCreateQuickAlbum(current) },
+                        onConfigure = { quickPickerVisible = true },
                     )
                 }
                 ViewerBottomBar(
@@ -188,19 +313,8 @@ fun ViewerScreen(
                     onMove = { current?.let(onMoveToAlbum) },
                     onDelete = { current?.let(onTrash) },
                     onInfo = { infoVisible = true },
-                    onPlayLive = if (current?.isLivePhoto == true) {
-                        {
-                            scope.launch {
-                                current?.let { ph ->
-                                    val u = onResolveLiveVideo(ph)
-                                    if (u != null) {
-                                        liveUri = u
-                                        livePlaying = true
-                                    }
-                                }
-                            }
-                        }
-                    } else null,
+                    onPlayLive = if (current?.isLivePhoto == true) ::toggleLive else null,
+                    livePlaying = livePlaying,
                 )
             }
         }
@@ -218,19 +332,21 @@ fun ViewerScreen(
             )
         }
 
-        // Live Photo 全屏播放覆盖层。
         AnimatedVisibility(
-            visible = livePlaying && liveUri != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.Center),
+            visible = quickPickerVisible,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            liveUri?.let { uri ->
-                LivePhotoPlayer(uri = uri, onClose = {
-                    livePlaying = false
-                    liveUri = null
-                })
-            }
+            QuickAlbumPicker(
+                all = allAlbums,
+                selected = quickAlbums,
+                onApply = {
+                    onSetQuickAlbums(it)
+                    quickPickerVisible = false
+                },
+                onClose = { quickPickerVisible = false },
+            )
         }
     }
 }
@@ -279,6 +395,119 @@ private fun ViewerTopBar(
     }
 }
 
+/**
+ * 微信风格的 LIVE 徽标：半透明黑底胶囊 + 同心圆图标 + "LIVE" 字样。
+ * 播放中会连着显示一个声音开关。
+ */
+@Composable
+private fun LiveBadge(
+    playing: Boolean,
+    muted: Boolean,
+    onToggle: () -> Unit,
+    onToggleMute: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = if (playing) 0.55f else 0.38f))
+                .clickable { onToggle() }
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LiveGlyph(active = playing)
+            Text(
+                "LIVE",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp,
+            )
+        }
+        if (playing) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable { onToggleMute() }
+                    .padding(6.dp),
+            ) {
+                Icon(
+                    if (muted) Icons.AutoMirrored.Rounded.VolumeOff
+                    else Icons.AutoMirrored.Rounded.VolumeUp,
+                    contentDescription = if (muted) "开启声音" else "静音",
+                    tint = Color.White,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+    }
+}
+
+/** LIVE 图标本体：外圈虚线环 + 中圈实线环 + 圆心点，和微信/iOS 的实况标一致。 */
+@Composable
+private fun LiveGlyph(active: Boolean) {
+    val tint = if (active) Color.White else Color.White.copy(alpha = 0.85f)
+    Canvas(Modifier.size(14.dp)) {
+        val r = size.minDimension / 2f
+        val stroke = 1.5.dp.toPx()
+        drawCircle(
+            color = tint,
+            radius = r - stroke / 2f,
+            style = Stroke(
+                width = stroke,
+                pathEffect = PathEffect.dashPathEffect(
+                    floatArrayOf(2.6.dp.toPx(), 2.0.dp.toPx()),
+                    0f,
+                ),
+            ),
+        )
+        drawCircle(color = tint, radius = r * 0.50f, style = Stroke(width = stroke))
+        drawCircle(color = tint, radius = r * 0.17f)
+    }
+}
+
+/** Live Photo 视频层。放在手势 Box 内部，VideoView 不消费触摸，滑动手势照常可用。 */
+@Composable
+private fun LiveVideoLayer(uri: Uri, muted: Boolean) {
+    var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    AndroidView(
+        factory = { ctx ->
+            VideoView(ctx).apply {
+                isClickable = false
+                isFocusable = false
+                setVideoURI(uri)
+                setOnPreparedListener { mp: MediaPlayer ->
+                    player = mp
+                    mp.isLooping = true
+                    val v = if (muted) 0f else 1f
+                    runCatching { mp.setVolume(v, v) }
+                    start()
+                }
+                setOnErrorListener { _, _, _ -> true }
+            }
+        },
+        update = {
+            // muted 变化会触发重组，这里把音量同步到已经准备好的播放器上。
+            player?.let { mp ->
+                val v = if (muted) 0f else 1f
+                runCatching { mp.setVolume(v, v) }
+            }
+        },
+        onRelease = { view ->
+            runCatching { view.stopPlayback() }
+            player = null
+        },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
 @Composable
 private fun ViewerBottomBar(
     photo: PhotoItem?,
@@ -287,6 +516,7 @@ private fun ViewerBottomBar(
     onDelete: () -> Unit,
     onInfo: () -> Unit,
     onPlayLive: (() -> Unit)? = null,
+    livePlaying: Boolean = false,
 ) {
     Row(
         Modifier
@@ -310,85 +540,180 @@ private fun ViewerBottomBar(
         ViewerAction(Icons.Rounded.Folder, "归入相册", onMove)
         ViewerAction(Icons.Rounded.Info, "信息", onInfo)
         if (onPlayLive != null) {
-            ViewerAction(Icons.Rounded.PlayArrow, "Live", onPlayLive)
+            ViewerAction(
+                icon = if (livePlaying) Icons.Rounded.Close else Icons.Rounded.PlayArrow,
+                label = if (livePlaying) "停止" else "Live",
+                onClick = onPlayLive,
+            )
         }
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
     }
 }
 
+/**
+ * 快捷归入条。
+ *
+ * 底色跟着主题走：每个文件夹轮换取 primary / secondary / tertiary 三组容器色，
+ * 这样在黑色的大图背景上既有足够对比度，多个文件夹之间也能一眼区分。
+ */
 @Composable
 private fun QuickAlbumBar(
     albums: List<String>,
     onPick: (String) -> Unit,
     onCreate: () -> Unit = {},
+    onConfigure: () -> Unit = {},
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val palette = remember(scheme) {
+        listOf(
+            scheme.primaryContainer to scheme.onPrimaryContainer,
+            scheme.tertiaryContainer to scheme.onTertiaryContainer,
+            scheme.secondaryContainer to scheme.onSecondaryContainer,
+        )
+    }
     LazyRow(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         item {
-            FilterChip(
-                selected = false,
+            QuickChip(
+                text = "选择",
+                icon = Icons.Rounded.Tune,
+                container = scheme.surfaceContainerHighest,
+                content = scheme.onSurface,
+                onClick = onConfigure,
+            )
+        }
+        item {
+            QuickChip(
+                text = "新建",
+                icon = Icons.Rounded.Add,
+                container = scheme.surfaceContainerHighest,
+                content = scheme.onSurface,
                 onClick = onCreate,
-                label = { Text("+ 新建", style = MaterialTheme.typography.labelSmall) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Rounded.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                },
             )
         }
         items(albums) { name ->
-            FilterChip(
-                selected = false,
+            val idx = albums.indexOf(name).coerceAtLeast(0)
+            val (container, content) = palette[idx % palette.size]
+            QuickChip(
+                text = name,
+                icon = Icons.Rounded.Folder,
+                container = container,
+                content = content,
                 onClick = { onPick(name) },
-                label = { Text(name, style = MaterialTheme.typography.labelSmall) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Rounded.Folder,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                },
             )
         }
     }
 }
 
-/** Live Photo 播放：用系统 VideoView 直接播同名短视频，全屏覆盖。 */
 @Composable
-private fun LivePhotoPlayer(uri: Uri, onClose: () -> Unit) {
-    Box(
+private fun QuickChip(
+    text: String,
+    icon: ImageVector,
+    container: Color,
+    content: Color,
+    onClick: () -> Unit,
+) {
+    FilterChip(
+        selected = false,
+        onClick = onClick,
+        label = {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        },
+        leadingIcon = {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+        },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = container,
+            labelColor = content,
+            iconColor = content,
+        ),
+        border = null,
+    )
+}
+
+/** 大图页直接勾选"哪些文件夹出现在快捷归入条上"。 */
+@Composable
+private fun QuickAlbumPicker(
+    all: List<String>,
+    selected: List<String>,
+    onApply: (List<String>) -> Unit,
+    onClose: () -> Unit,
+) {
+    var picks by remember(all, selected) { mutableStateOf(selected.toSet()) }
+    Column(
         Modifier
-            .fillMaxSize()
-            .background(Color.Black),
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
     ) {
-        AndroidView(
-            factory = { ctx ->
-                VideoView(ctx).apply {
-                    setVideoURI(uri)
-                    setOnPreparedListener { mp: MediaPlayer ->
-                        mp.isLooping = true
-                        start()
-                    }
-                    setOnErrorListener { _, _, _ -> true }
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        IconButton(
-            onClick = onClose,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp),
+        Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Close, "关闭", tint = Color.White)
+            Column(Modifier.weight(1f)) {
+                Text("快捷归入的文件夹", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "已选 ${picks.size} 个 · 会按勾选顺序显示在大图底部",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onClose) { Text("取消") }
+            TextButton(
+                onClick = {
+                    // 保持原有顺序，新勾的追加在后面，避免每次开面板顺序都变。
+                    val ordered = selected.filter { it in picks } +
+                        all.filter { it in picks && it !in selected }
+                    onApply(ordered)
+                },
+            ) { Text("完成") }
+        }
+        if (all.isEmpty()) {
+            Text(
+                "还没有任何相册文件夹",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(20.dp),
+            )
+        } else {
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                items(all) { name ->
+                    val checked = name in picks
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                picks = if (checked) picks - name else picks + name
+                            }
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = checked, onCheckedChange = null)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
         }
     }
+    BackHandler(enabled = true) { onClose() }
 }
 
 @Composable
