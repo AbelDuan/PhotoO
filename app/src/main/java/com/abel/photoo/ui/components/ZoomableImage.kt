@@ -2,6 +2,7 @@ package com.abel.photoo.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -15,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -23,6 +25,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -48,21 +51,32 @@ fun ZoomableImage(
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var dragY by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+    var exiting by remember { mutableStateOf(false) }
+    var exitUp by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
 
     // 翻页之后必须复位，否则下一张会继承上一张的缩放状态。
     LaunchedEffect(resetKey) {
         scale = 1f
         offset = Offset.Zero
-        dragY = 0f
+        offsetY = 0f
+        exiting = false
         onZoomChanged(false)
     }
 
     LaunchedEffect(scale) { onZoomChanged(scale > 1.01f) }
 
     val animScale by animateFloatAsState(scale, spring(), label = "scale")
+    // 上滑松手后整张图向上飞出并淡出，给出明确的"已处理"反馈；动画结束后才真正移除。
+    val flyOffset by animateFloatAsState(
+        targetValue = if (exiting) (if (exitUp) -1 else 1) * 3700f else 0f,
+        animationSpec = tween(240),
+        label = "flyOffset",
+    )
+    val displayY = if (exiting) offsetY + flyOffset else offsetY
     // 上滑时整张图跟着走并逐渐变淡，给一个"要被丢掉了"的直觉反馈。
-    val dragAlpha = (1f - abs(dragY) / 900f).coerceIn(0.35f, 1f)
+    val dragAlpha = (1f - (abs(displayY) / 900f).coerceIn(0f, 1f)).coerceIn(0f, 1f)
 
     Box(
         modifier = modifier
@@ -128,20 +142,30 @@ fun ZoomableImage(
                             ) {
                                 verticalLocked = true
                             }
-                            if (verticalLocked) {
-                                dragY += pan.y
-                                event.changes.forEach { if (it.positionChanged()) it.consume() }
-                            }
+                        if (verticalLocked) {
+                            offsetY += pan.y
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
                         }
                     } while (pressed)
 
                     if (verticalLocked) {
                         val threshold = size.height * 0.16f
                         when {
-                            dragY < -threshold -> onSwipeUp()
-                            dragY > threshold -> onSwipeDown()
+                            offsetY < -threshold -> {
+                                // 触发删除：整张图向上飞出并淡出，给出明确的"已处理"反馈。
+                                // 用独立协程延时后再真正移除，避免动画被打断（仓库层已是内存隐藏，无需整库刷新）。
+                                exitUp = true
+                                exiting = true
+                                scope.launch { kotlinx.coroutines.delay(240); onSwipeUp() }
+                            }
+                            offsetY > threshold -> {
+                                exitUp = false
+                                exiting = true
+                                scope.launch { kotlinx.coroutines.delay(240); onSwipeDown() }
+                            }
+                            else -> offsetY = 0f
                         }
-                        dragY = 0f
                     }
                     if (scale <= 1.02f) {
                         scale = 1f
@@ -160,7 +184,7 @@ fun ZoomableImage(
                     scaleX = animScale
                     scaleY = animScale
                     translationX = offset.x
-                    translationY = offset.y + dragY
+                    translationY = offset.y + displayY
                     alpha = dragAlpha
                 },
         )

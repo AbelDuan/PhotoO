@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
@@ -61,6 +63,7 @@ fun SettingsScreen(
     val settings by vm.settings.collectAsStateWithLifecycle()
     val stats by vm.stats.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
+    val albums by vm.albums.collectAsStateWithLifecycle()
 
     var confirmReset by remember { mutableStateOf(false) }
     var confirmClearGroups by remember { mutableStateOf(false) }
@@ -134,6 +137,37 @@ fun SettingsScreen(
                     subtitle = "让所有已处理的相似组重新出现",
                     onClick = { confirmClearGroups = true },
                 )
+            }
+        }
+
+        item("quick") {
+            SettingsGroup("快捷归入", Icons.Rounded.Folder) {
+                Hint("选中的相册会出现在大图页底部，点一下即可把当前照片归入，免去每次走相册选择器。")
+                if (albums.isEmpty()) {
+                    Hint("还没有任何相册，先去相册页看看。")
+                } else {
+                    val picked = settings.quickAlbums.toSet()
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        albums.forEach { album ->
+                            FilterChip(
+                                selected = album.name in picked,
+                                onClick = {
+                                    val next = if (album.name in picked) {
+                                        picked - album.name
+                                    } else {
+                                        picked + album.name
+                                    }
+                                    vm.setQuickAlbums(next.toList())
+                                },
+                                label = { Text(album.name) },
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -276,7 +310,11 @@ private fun <T> ChipRow(
     label: (T) -> String,
     onPick: (T) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         options.forEach { option ->
             FilterChip(
                 selected = option == selected,

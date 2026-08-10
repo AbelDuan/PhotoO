@@ -71,10 +71,17 @@ class MediaStoreSource(private val context: Context) {
                     val relative = c.getStringOrNull(pathIdx).orEmpty()
                     val bucketName = c.getStringOrNull(bucketNameIdx)
                         ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
+                    val fullUri = ContentUris.withAppendedId(collection, id)
+                    // 缩略图 uri：MediaStore 维护的 MINI_KIND 缩略图，加载它比全图快几十倍。
+                    @Suppress("DEPRECATION")
+                    val thumbUri = ContentUris.withAppendedId(
+                        MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI, id
+                    )
 
                     out += PhotoItem(
                         id = id,
-                        uri = ContentUris.withAppendedId(collection, id),
+                        uri = fullUri,
+                        thumbUri = thumbUri,
                         displayName = c.getStringOrNull(nameIdx).orEmpty(),
                         bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong(),
                         bucketName = bucketName,
@@ -110,7 +117,7 @@ class MediaStoreSource(private val context: Context) {
                 name = items.first().bucketName,
                 relativePath = normalizePath(items.first().relativePath),
                 count = items.size,
-                coverUri = newest?.uri,
+                coverUri = newest?.thumbUri,
                 latestDate = newest?.dateTaken ?: 0L,
             )
         }.sortedWith(

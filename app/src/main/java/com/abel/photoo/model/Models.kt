@@ -6,6 +6,8 @@ import android.net.Uri
 data class PhotoItem(
     val id: Long,
     val uri: Uri,
+    /** 预览用缩略图（MediaStore 维护的 MINI_KIND 缩略图），比全图小几个数量级，网格加载才快。 */
+    val thumbUri: Uri,
     val displayName: String,
     val bucketId: Long,
     val bucketName: String,

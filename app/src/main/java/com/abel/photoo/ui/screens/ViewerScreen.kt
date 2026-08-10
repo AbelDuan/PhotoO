@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,6 +82,8 @@ fun ViewerScreen(
     onTrash: (PhotoItem) -> Unit,
     onToggleFavorite: (PhotoItem) -> Unit,
     onMoveToAlbum: (PhotoItem) -> Unit,
+    quickAlbums: List<String> = emptyList(),
+    onMoveToQuickAlbum: (PhotoItem, String) -> Unit = { _, _ -> },
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -149,13 +154,22 @@ fun ViewerScreen(
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            ViewerBottomBar(
-                photo = current,
-                onFavorite = { current?.let(onToggleFavorite) },
-                onMove = { current?.let(onMoveToAlbum) },
-                onDelete = { current?.let(onTrash) },
-                onInfo = { infoVisible = true },
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // 快捷归入：常看的那几个文件夹这里点一下就归，不用每次走相册选择器。
+                if (quickAlbums.isNotEmpty() && current != null) {
+                    QuickAlbumBar(
+                        albums = quickAlbums,
+                        onPick = { onMoveToQuickAlbum(current, it) },
+                    )
+                }
+                ViewerBottomBar(
+                    photo = current,
+                    onFavorite = { current?.let(onToggleFavorite) },
+                    onMove = { current?.let(onMoveToAlbum) },
+                    onDelete = { current?.let(onTrash) },
+                    onInfo = { infoVisible = true },
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -247,6 +261,34 @@ private fun ViewerBottomBar(
         ViewerAction(Icons.Rounded.Folder, "归入相册", onMove)
         ViewerAction(Icons.Rounded.Info, "信息", onInfo)
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
+    }
+}
+
+@Composable
+private fun QuickAlbumBar(
+    albums: List<String>,
+    onPick: (String) -> Unit,
+) {
+    LazyRow(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(albums) { name ->
+            FilterChip(
+                selected = false,
+                onClick = { onPick(name) },
+                label = { Text(name, style = MaterialTheme.typography.labelSmall) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Rounded.Folder,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+            )
+        }
     }
 }
 

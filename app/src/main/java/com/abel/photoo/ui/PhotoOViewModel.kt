@@ -184,6 +184,13 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         _selection.value = emptySet()
     }
 
+    /** 大图页快捷归入：按相册名一键归档当前照片。 */
+    fun moveToAlbumByName(name: String, ids: Collection<Long>) {
+        repo.moveToAlbumByName(name, ids)
+    }
+
+    fun setQuickAlbums(list: List<String>) = prefs.setQuickAlbums(list)
+
     fun scanSimilar(force: Boolean = false) = repo.scanSimilar(force)
     fun cancelScan() = repo.cancelScan()
     fun resolveGroup(key: String) = repo.resolveGroup(key)

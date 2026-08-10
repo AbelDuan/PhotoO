@@ -242,7 +242,8 @@ class PhotoRepository(
      */
     fun moveToTrash(ids: Collection<Long>) {
         if (ids.isEmpty()) return
-        val targets = _photos.value.filter { it.id in ids.toHashSet() }
+        val idSet = ids.toHashSet()
+        val targets = _photos.value.filter { it.id in idSet }
         if (targets.isEmpty()) return
 
         scope.launch {
@@ -272,9 +273,56 @@ class PhotoRepository(
                 )
             }
             withContext(Dispatchers.IO) { db.putTrash(rows) }
-            refresh()
+            // 关键：内存内立即隐藏，列表/大图瞬间更新，不再全量重查 MediaStore
+            // （之前上滑"等一会"的根因就是 refresh() 把整库重新拉了一遍）。
+            _photos.value = _photos.value.filterNot { it.id in idSet }
+            recomputeDerived()
             emit("已移入回收站 ${rows.size} 张")
         }
+    }
+
+    /**
+     * 不碰 MediaStore，仅用内存中的照片 + 两次轻量小查询（自定义相册、回收站）
+     * 重算相册列表与统计。删除/彻底删除后调用，避免每次都全量刷新卡顿。
+     */
+    private suspend fun recomputeDerived() {
+        val customAlbums = withContext(Dispatchers.IO) { db.listCustomAlbums() }
+        val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
+        val visible = _photos.value
+        val mediaAlbums = source.buildAlbums(visible)
+        val existingPaths = mediaAlbums.mapTo(HashSet()) { it.relativePath.lowercase() }
+        val placeholders = customAlbums
+            .filter { it.relativePath.lowercase() !in existingPaths }
+            .map {
+                AlbumItem(
+                    bucketId = -(it.relativePath.hashCode().toLong().and(0xFFFFFFFFL) + 1),
+                    name = it.name,
+                    relativePath = it.relativePath,
+                    count = 0,
+                    coverUri = null,
+                    latestDate = 0L,
+                    pendingLocal = true,
+                )
+            }
+        _albums.value = mediaAlbums + placeholders
+        _trash.value = trashRows.map {
+            TrashItem(
+                id = it.id,
+                uri = Uri.parse(it.uri),
+                displayName = it.displayName,
+                bucketName = it.bucketName,
+                size = it.size,
+                dateTaken = it.dateTaken,
+                deletedAt = it.deletedAt,
+                systemTrashed = it.systemTrashed,
+            )
+        }
+        _stats.value = LibraryStats(
+            total = visible.size,
+            reviewed = visible.count { it.reviewed },
+            trashed = trashRows.size,
+            albums = _albums.value.size,
+        )
     }
 
     fun restoreFromTrash(ids: Collection<Long>) {
@@ -394,6 +442,20 @@ class PhotoRepository(
             refresh()
             emit("已删除空相册「${album.name}」")
         }
+    }
+
+    /**
+     * 大图页"快捷归入"用：按相册名直接归档，省去先弹相册选择器的两步操作。
+     * 找不到同名相册直接提示，不抛异常。
+     */
+    fun moveToAlbumByName(name: String, ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val album = _albums.value.firstOrNull { it.name == name }
+        if (album == null) {
+            emit("没有相册「$name」，请先在设置里添加快捷相册")
+            return
+        }
+        moveToAlbum(ids, album)
     }
 
     // ------------------------------------------------------------------ 相似图

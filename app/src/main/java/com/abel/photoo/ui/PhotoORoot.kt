@@ -347,6 +347,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onTrash = { vm.moveToTrash(listOf(it.id)) },
                     onToggleFavorite = { vm.toggleFavorite(it.id) },
                     onMoveToAlbum = { pickerTargets = listOf(it.id) },
+                    quickAlbums = vm.prefs.current.quickAlbums,
+                    onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
                 )
             }
         }

@@ -28,6 +28,8 @@ data class Settings(
     /** 启动时若有未处理照片，直接进入整理模式。 */
     val resumeReviewOnLaunch: Boolean = false,
     val showLocation: Boolean = true,
+    /** 大图页一键归入的相册名列表（用户自选的常用文件夹）。 */
+    val quickAlbums: List<String> = emptyList(),
 )
 
 /**
@@ -54,6 +56,8 @@ class AppPrefs(context: Context) {
         alsoSystemTrash = sp.getBoolean(KEY_SYSTEM_TRASH, false),
         resumeReviewOnLaunch = sp.getBoolean(KEY_RESUME, false),
         showLocation = sp.getBoolean(KEY_LOCATION, true),
+        quickAlbums = sp.getString(KEY_QUICK, "")
+            .orEmpty().split(QUICK_DELIM).filter { it.isNotEmpty() },
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -69,6 +73,7 @@ class AppPrefs(context: Context) {
             putBoolean(KEY_SYSTEM_TRASH, next.alsoSystemTrash)
             putBoolean(KEY_RESUME, next.resumeReviewOnLaunch)
             putBoolean(KEY_LOCATION, next.showLocation)
+            putString(KEY_QUICK, next.quickAlbums.joinToString(QUICK_DELIM))
         }
     }
 
@@ -81,6 +86,7 @@ class AppPrefs(context: Context) {
     fun setAlsoSystemTrash(enabled: Boolean) = update { copy(alsoSystemTrash = enabled) }
     fun setResumeReview(enabled: Boolean) = update { copy(resumeReviewOnLaunch = enabled) }
     fun setShowLocation(enabled: Boolean) = update { copy(showLocation = enabled) }
+    fun setQuickAlbums(list: List<String>) = update { copy(quickAlbums = list.distinct()) }
 
     private inline fun <reified T : Enum<T>> String?.toEnum(fallback: T): T =
         enumValues<T>().firstOrNull { it.name == this } ?: fallback
@@ -95,5 +101,7 @@ class AppPrefs(context: Context) {
         const val KEY_SYSTEM_TRASH = "also_system_trash"
         const val KEY_RESUME = "resume_review"
         const val KEY_LOCATION = "show_location"
+        const val KEY_QUICK = "quick_albums"
+        const val QUICK_DELIM = "\u001f"
     }
 }
