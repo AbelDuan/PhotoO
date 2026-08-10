@@ -237,6 +237,10 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------- Live Photo / 地图
 
     fun setLiveAutoPlay(on: Boolean) = prefs.setLiveAutoPlay(on)
+    fun setAmapKey(key: String) = prefs.setAmapKey(key)
+
+    /** 手动重新扫描实况照片（清空识别结果后重扫），设置页"重新扫描实况照片"调用。 */
+    fun rescanLivePhotos() = repo.rescanLivePhotos()
 
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)

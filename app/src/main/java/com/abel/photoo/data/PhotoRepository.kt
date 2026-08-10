@@ -111,9 +111,8 @@ class PhotoRepository(
         if (observing) return
         observing = true
         scope.launch {
+            // refresh() 末尾会自动触发一次实况扫描（结果落库，稳定后几乎零开销）。
             refresh()
-            // 刷新后后台扫描内嵌 Live Photo（小米等把实况写进 JPG），识别结果落库复用。
-            scanLivePhotos()
         }
         source.observeChanges()
             .drop(1)                 // 注册时会立刻发一次，跳过它避免重复加载
@@ -201,6 +200,10 @@ class PhotoRepository(
             // 图库变化后用已持久化的哈希重建相似分组。哈希存在本地 photo_hash 表，
             // 这里只聚类不重算，所以下次打开直接就有相似结果、无需重新扫描整库。
             rebuildGroups()
+
+            // 新拍的照片也要认出实况来。扫描结果（含"不是实况"）都落库，
+            // 所以这一步在稳定状态下几乎不做任何 IO。
+            scanLivePhotos()
         } catch (e: Throwable) {
             // 任何加载异常都兜底成提示，绝不向上抛到 scope 导致进程被杀（闪退）。
             Log.e("PhotoO", "refresh failed", e)
@@ -539,6 +542,19 @@ class PhotoRepository(
      * 因此即便几千张照片也只是一段一次性的后台 IO，识别结果写入 [PhotoODb.live_photo] 表，
      * 下次启动直接复用、不再重扫。同目录同名视频文件（type==1）由 queryPhotos 同步识别，不在此处理。
      */
+    /**
+     * 后台扫描"图片文件内嵌视频"型 Live Photo（小米/华为等把实况视频直接写进 JPG/HEIC 的 XMP）。
+     *
+     * 只扫图片类、只读本文件头部约 256KB（XMP 元数据在文件开头），不在主线程、不读整张原图，
+     * 因此即便几千张照片也只是一段一次性的后台 IO。识别结果（含"不是实况"的负结果）一次性
+     * 批量写入 [PhotoODb.live_photo] 表，下次启动直接复用、不再重扫。
+     * 同目录同名视频文件（type==1）由 queryPhotos 同步识别，不在此处理。
+     *
+     * detectEmbeddedLive 的返回值语义：
+     *   > 0 ：明确是实况，返回内嵌视频在文件中的字节偏移；
+     *   - 1 ：有实况标记但 XMP 里偏移损坏/读不出，抽取阶段会整文件扫描定位视频；
+     *   0   ：不是实况（落库负结果，避免每次启动重扫）。
+     */
     fun scanLivePhotos() {
         scope.launch(Dispatchers.IO) {
             try {
@@ -546,22 +562,36 @@ class PhotoRepository(
                 val photos = _photos.value
                 // 已经识别过的（含落库的内嵌/外部）跳过。
                 val toCheck = photos.filter {
-                    it.liveType == 0 && it.mimeType.startsWith("image/jpeg") && it.id !in known
+                    it.liveType == 0 &&
+                        (it.mimeType == "image/jpeg" ||
+                            it.mimeType == "image/heic" ||
+                            it.mimeType == "image/heif") &&
+                        it.id !in known
                 }
-                val pending = toCheck.toMutableList()
                 // 分块扫描，每处理若干张让出一次，避免长期占用 IO 线程影响其它加载。
-                pending.chunked(40).forEach { chunk ->
+                toCheck.chunked(40).forEach { chunk ->
                     if (!isActive) return@launch
-                    val updates = HashMap<Long, Long>() // id -> offset
+                    val batch = ArrayList<PhotoODb.LiveRow>(chunk.size)
+                    val updates = HashMap<Long, Long>() // id -> offset（仅实况需要更新内存标记）
                     chunk.forEach { photo ->
                         val offset = detectEmbeddedLive(photo.uri)
-                        if (offset > 0) {
-                            db.putLivePhoto(
-                                PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = offset, cachedPath = null)
-                            )
-                            updates[photo.id] = offset
+                        when {
+                            offset > 0 -> {
+                                batch += PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = offset, cachedPath = null)
+                                updates[photo.id] = offset
+                            }
+                            offset == -1L -> {
+                                // 确定是实况但偏移未知，标记 type2/offset=0，抽取时整文件扫描。
+                                batch += PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = 0, cachedPath = null)
+                                updates[photo.id] = 0
+                            }
+                            else -> {
+                                // 不是实况，落库负结果，下次启动直接跳过。
+                                batch += PhotoODb.LiveRow(id = photo.id, type = 0, videoOffset = 0, cachedPath = null)
+                            }
                         }
                     }
+                    if (batch.isNotEmpty()) db.putLivePhotoBatch(batch)
                     if (updates.isNotEmpty()) {
                         _photos.value = _photos.value.map { p ->
                             updates[p.id]?.let { off -> p.copy(liveType = 2, liveOffset = off) } ?: p
@@ -571,6 +601,26 @@ class PhotoRepository(
                 }
             } catch (e: Throwable) {
                 Log.w("PhotoO", "scanLivePhotos failed", e)
+            }
+        }
+    }
+
+    /**
+     * 手动重新扫描实况照片：清空已识别结果，内存里把已标记的实况还原成未识别，
+     * 再跑一遍扫描。设置页"重新扫描实况照片"调用，用于换手机/换图库后重新认实况。
+     */
+    fun rescanLivePhotos() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                db.clearLivePhotos()
+                _photos.value = _photos.value.map {
+                    if (it.liveType == 2) it.copy(liveType = 0, liveOffset = 0) else it
+                }
+                scanLivePhotos()
+                emit("已开始重新扫描实况照片")
+            } catch (e: Throwable) {
+                Log.w("PhotoO", "rescanLivePhotos failed", e)
+                emit("重新扫描失败：${e.message ?: e::class.simpleName}")
             }
         }
     }
@@ -645,6 +695,57 @@ class PhotoRepository(
         runCatching { exif.read(sampleId, sampleUri, resolvePlace = true).place }.getOrNull()
 
     /**
+     * 反查一个坐标的地名，优先用高德（联网、地址更准），失败或没填 key 时回退到设备 Geocoder。
+     * 注意：地图渲染走的是高德 JS API（同一个 Web 端 key），所以这里不再额外要 Web 服务 key。
+     */
+    suspend fun reverseGeocode(lat: Double, lon: Double): String? {
+        if (!CoordTransform.isValid(lat, lon)) return null
+        val key = prefs.current.amapKey
+        if (key.isNotBlank()) amapRegeo(lat, lon, key)?.let { return it }
+        return runCatching { exif.geocode(lat, lon) }.getOrNull()
+    }
+
+    /** 高德逆地理编码 REST（坐标需先转 GCJ-02）。 */
+    private suspend fun amapRegeo(lat: Double, lon: Double, key: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val g = CoordTransform.wgs84ToGcj02(lat, lon)
+                val loc = "%.6f,%.6f".format(java.util.Locale.US, g.lon, g.lat)
+                val url =
+                    "https://restapi.amap.com/v3/geocode/regeo?output=JSON&location=$loc" +
+                        "&key=$key&radius=1000&extensions=base"
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                }
+                val resp = if (conn.responseCode == 200) {
+                    conn.inputStream.bufferedReader().readText()
+                } else null
+                conn.disconnect()
+                resp?.let { parseAmapRegeo(it) }
+            }.getOrNull()
+        }
+
+    private fun parseAmapRegeo(json: String): String? {
+        val root = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return null
+        if (root.optString("status") != "1") return null
+        val regeo = root.optJSONObject("regeocode") ?: return null
+        regeo.optString("formatted_address").takeIf { it.isNotBlank() }?.let { return it }
+        val ac = regeo.optJSONObject("addressComponent") ?: return null
+        val province = ac.optString("province").orEmpty()
+        val city = ac.optString("city").takeIf { it.isNotBlank() && it != province } ?: ""
+        return listOf(
+            province,
+            city,
+            ac.optString("district"),
+            ac.optString("township"),
+            ac.optString("street"),
+            ac.optString("streetNumber"),
+        ).filter { it.isNotBlank() }.joinToString("")
+    }
+
+    /**
      * 解析某张 Live Photo 的可播放视频 Uri。
      * - type==1：直接返回同名视频的内容 Uri。
      * - type==2：首次播放时从图片文件抽取内嵌视频到缓存目录（只做一次，路径落库），
@@ -670,10 +771,12 @@ class PhotoRepository(
     }
 
     /**
-     * 读取 JPEG 头部，从 XMP 里找内嵌视频的字节偏移。
-     * 覆盖 Google Motion Photo / 小米(HyperOS) / 华为 / Pixel 用的 GCamera:MicroVideo 方案：
-     * XMP 中 `GCamera:MicroVideoOffset="N"` 表示视频流从文件头第 N 字节开始。
-     * 读不到或解析失败返回 0（不是 Live Photo）。
+     * 读取图片头部，从 XMP 里找内嵌视频的字节偏移。
+     * 覆盖 Google Motion Photo / 小米(HyperOS) / 华为 / Pixel / 三星 HEIC 用的方案：
+     * - `GCamera:MicroVideoOffset="N"`：视频流从文件头第 N 字节开始（属性式、最常见）；
+     * - `<GCamera:MicroVideoOffset>N</GCamera:MicroVideoOffset>`：元素式写法；
+     * - 三星 HEIC：`Container:ItemLocation="N"` 给出内嵌视频在文件中的偏移。
+     * 读不到标记返回 0（不是实况）；有标记但偏移读不出返回 -1（让抽取阶段整文件扫描）。
      */
     private fun detectEmbeddedLive(uri: Uri): Long {
         return runCatching {
@@ -681,30 +784,60 @@ class PhotoRepository(
             val read = resolver().openInputStream(uri)?.use { it.read(head) } ?: return 0
             if (read <= 0) return 0
             val text = String(head, 0, read, Charsets.US_ASCII)
-            // 必须先确认这是带 Motion Photo 标记的 JPEG，再取偏移，避免误判。
+            // 必须先确认这是带实况标记的文件，再取偏移，避免误判普通图片。
             val hasMarker = text.contains("MicroVideo", ignoreCase = true) ||
                 text.contains("MotionPhoto", ignoreCase = true) ||
-                text.contains("Camera:MotionPhoto", ignoreCase = true)
+                text.contains("GCamera", ignoreCase = true) ||
+                text.contains("MotionPhotoData", ignoreCase = true) ||
+                text.contains("Container:Directory", ignoreCase = true) ||
+                text.contains("Container:Item", ignoreCase = true)
             if (!hasMarker) return 0
-            // 取 MicroVideoOffset / MotionPhoto 的偏移数值（从文件头算起）。
-            val regex = Regex("""(?:GCamera:)?MicroVideoOffset["']?\s*[:=]\s*['"]?(\d+)""", RegexOption.IGNORE_CASE)
-            val m = regex.find(text) ?: return 0
-            m.groupValues[1].toLongOrNull() ?: 0L
+            // 依次尝试几种偏移写法；命中任意一个就直接用。
+            parseOffset(text, "MicroVideoOffset")?.let { return it }
+            parseOffset(text, "Container:ItemLocation")?.let { return it }
+            // 有实况标记但 XMP 偏移损坏/读不出：返回 -1 让抽取阶段整文件扫描定位视频。
+            -1L
         }.getOrDefault(0L)
     }
 
-    /** 从图片文件抽取内嵌视频字节到 out 文件；校验魔数，失败尝试从文件尾部偏移。 */
+    /**
+     * 在 XMP 文本里按属性式（`name="123"` / `name:'123'` / `name: 123`）和元素式
+     * （`<name>123</name>`）两种写法提取第一个数字偏移，读不出返回 null。
+     */
+    private fun parseOffset(text: String, name: String): Long? {
+        val attr = Regex("""$name["']?\s*[:=]\s*['"]?(\d+)""", RegexOption.IGNORE_CASE)
+        attr.find(text)?.let { return it.groupValues[1].toLongOrNull() }
+        val elem = Regex("""$name>\s*(\d+)\s*<""", RegexOption.IGNORE_CASE)
+        elem.find(text)?.let { return it.groupValues[1].toLongOrNull() }
+        return null
+    }
+
+    /**
+     * 从图片文件抽取内嵌视频字节到 out 文件。
+     * 依次尝试：(1) XMP 给出的偏移（从头算）；(2) 从文件尾算起的剩余长度（部分机型）；
+     * (3) 整文件扫描定位 ISO BMFF 视频盒（Xiaomi 偏移常不准，这一步兜底）。
+     * 第 (3) 步成功后把真实偏移回填数据库，下次抽取直接走 (1)。
+     */
     private fun extractEmbeddedVideo(photo: PhotoItem, out: java.io.File): Boolean {
         return runCatching {
             val resolver = resolver()
+            val offset = photo.liveOffset
             // 优先：偏移从文件头算起。
-            if (tryExtract(resolver, photo.uri, photo.liveOffset, out)
-                && isValidVideo(out)
+            if (offset > 0 &&
+                tryExtract(resolver, photo.uri, offset, out) && isValidVideo(out)
             ) return@runCatching true
             // 回退：部分机型偏移是从文件尾算起的剩余字节长度。
-            val fromEnd = (photo.size - photo.liveOffset).coerceAtLeast(0)
-            if (fromEnd > 0 && tryExtract(resolver, photo.uri, fromEnd, out) && isValidVideo(out)
-            ) return@runCatching true
+            if (offset > 0) {
+                val fromEnd = (photo.size - offset).coerceAtLeast(0)
+                if (fromEnd > 0 && tryExtract(resolver, photo.uri, fromEnd, out) && isValidVideo(out)
+                ) return@runCatching true
+            }
+            // 兜底：整文件扫描定位内嵌视频的真实起点（ftyp 盒）。
+            val found = findEmbeddedVideoStart(resolver, photo.uri, photo.size)
+            if (found >= 0 && tryExtract(resolver, photo.uri, found, out) && isValidVideo(out)) {
+                db.setLiveOffset(photo.id, found) // 记下真实偏移，下次无需再全扫
+                return@runCatching true
+            }
             false
         }.getOrDefault(false)
     }
@@ -733,14 +866,66 @@ class PhotoRepository(
         return out.exists() && out.length() > 0
     }
 
-    /** 简单校验抽出来的确实是视频（ISO BMFF：以 ftyp 开头）。 */
+    /**
+     * 简单校验抽出来的确实是视频（ISO BMFF：以 size + 'ftyp' 开头的盒）。
+     * MP4/MOV/3GP 都符合，品牌（isom / mp42 / 1sav / 3g2 / qt 等）不影响判定。
+     */
     private fun isValidVideo(file: java.io.File): Boolean {
         if (!file.exists() || file.length() < 12) return false
         val head = ByteArray(12)
         file.inputStream().use { it.read(head) }
-        // ....ftyp 或 ID3/写死的 mp4 标记。
-        return head[4] == 'f'.code.toByte() && head[5] == 't'.code.toByte() &&
+        val isFtyp = head[4] == 'f'.code.toByte() && head[5] == 't'.code.toByte() &&
             head[6] == 'y'.code.toByte() && head[7] == 'p'.code.toByte()
+        if (!isFtyp) return false
+        val boxSize = ((head[0].toLong() and 0xFF) shl 24) or
+            ((head[1].toLong() and 0xFF) shl 16) or
+            ((head[2].toLong() and 0xFF) shl 8) or
+            (head[3].toLong() and 0xFF)
+        return boxSize >= 8L && boxSize <= file.length()
+    }
+
+    /**
+     * 整文件扫描定位内嵌视频起始字节：读尾部约 8MB，从后往前找第一个 'ftyp' 盒
+     * （实况视频通常追加在 JPEG 之后、文件末尾），盒起点 = ftyp 位置 - 4。
+     * 找不到返回 -1。
+     */
+    private fun findEmbeddedVideoStart(
+        resolver: android.content.ContentResolver,
+        uri: Uri,
+        fileLen: Long,
+    ): Long {
+        if (fileLen <= 16) return -1
+        val tailLen = minOf(fileLen, 8L * 1024 * 1024).toInt()
+        val buf = ByteArray(tailLen)
+        var read = 0
+        resolver.openInputStream(uri)?.use { input ->
+            // 跳到尾部区域。
+            var remaining = fileLen - tailLen
+            val tmp = ByteArray(8192)
+            while (remaining > 0) {
+                val n = input.read(tmp, 0, minOf(tmp.size, remaining.toInt()))
+                if (n < 0) break
+                remaining -= n
+            }
+            read = input.read(buf)
+        }
+        if (read <= 12) return -1
+        // 从后往前找 ftyp（用 toByte() 避免符号扩展导致的范围问题）。
+        for (i in (read - 4) downTo 0) {
+            if (buf[i] == 'f'.code.toByte() && buf[i + 1] == 't'.code.toByte() &&
+                buf[i + 2] == 'y'.code.toByte() && buf[i + 3] == 'p'.code.toByte()
+            ) {
+                val boxStart = i - 4
+                if (boxStart >= 0) {
+                    val boxSize = ((buf[boxStart].toLong() and 0xFF) shl 24) or
+                        ((buf[boxStart + 1].toLong() and 0xFF) shl 16) or
+                        ((buf[boxStart + 2].toLong() and 0xFF) shl 8) or
+                        (buf[boxStart + 3].toLong() and 0xFF)
+                    if (boxSize >= 8L) return (fileLen - tailLen) + boxStart
+                }
+            }
+        }
+        return -1
     }
 
     private fun resolver() = context.contentResolver

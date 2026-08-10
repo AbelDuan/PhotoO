@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -114,7 +118,7 @@ fun SettingsScreen(
         }
 
         item("gesture") {
-            SettingsGroup("大图手势", Icons.Rounded.Swipe) {
+            SettingsGroup("大图手势", Icons.Rounded.Swipe, initiallyExpanded = false) {
                 Hint("给四个滑动方向各绑一个动作。左右保持「下一张 / 上一张」时用系统翻页，跟手最顺；改成别的动作后翻页交给手势判定。")
                 GestureDirection.entries.forEach { dir ->
                     RowLabel(dir.label)
@@ -150,6 +154,11 @@ fun SettingsScreen(
                         "在大图左上角的 LIVE 标旁边可以随时开声音。",
                     checked = settings.liveAutoPlay,
                     onChange = vm::setLiveAutoPlay,
+                )
+                ActionRow(
+                    title = "重新扫描实况照片",
+                    subtitle = "清空已识别结果并重新检测内嵌视频（小米/华为等）",
+                    onClick = vm::rescanLivePhotos,
                 )
             }
         }
@@ -270,6 +279,29 @@ fun SettingsScreen(
             }
         }
 
+        item("map") {
+            SettingsGroup("地图", Icons.Rounded.Place) {
+                Hint("地图 Tab 要显示可缩放的真实地图、并联网解析拍摄点地址，需要一个高德地图 Key（JS API 类型）。")
+                var keyText by remember { mutableStateOf(settings.amapKey) }
+                OutlinedTextField(
+                    value = keyText,
+                    onValueChange = {
+                        keyText = it
+                        vm.setAmapKey(it)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("高德地图 Key") },
+                    placeholder = { Text("留空则使用离线示意图") },
+                    singleLine = true,
+                )
+                if (settings.amapKey.isNotBlank()) {
+                    Hint("已填入 Key（共 ${settings.amapKey.length} 位）。地图 Tab 会自动联网加载真实底图。")
+                } else {
+                    Hint("没有 Key 也能用：地图 Tab 会画出离线示意图，只是不可缩放、不显示真实街道。")
+                }
+            }
+        }
+
         item("about") {
             SettingsGroup("关于", Icons.Rounded.Info) {
                 Hint(
@@ -307,8 +339,10 @@ fun SettingsScreen(
 private fun SettingsGroup(
     title: String,
     icon: ImageVector,
+    initiallyExpanded: Boolean = true,
     content: @Composable () -> Unit,
 ) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -317,7 +351,13 @@ private fun SettingsGroup(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        // 只有标题栏可点：避免和内部 Switch/Chip/ActionRow 的点击冲突。
         Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -332,8 +372,15 @@ private fun SettingsGroup(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
+            Spacer(Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
-        content()
+        if (expanded) content()
     }
 }
 

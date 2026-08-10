@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.abel.photoo.model.AlbumItem
+import com.abel.photoo.model.GeoCluster
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.components.AlbumPickerSheet
 import com.abel.photoo.ui.components.ConfirmDialog
@@ -83,6 +84,7 @@ import com.abel.photoo.ui.components.EmptyState
 import com.abel.photoo.ui.components.TextInputDialog
 import com.abel.photoo.ui.screens.AlbumDetailScreen
 import com.abel.photoo.ui.screens.AlbumsScreen
+import com.abel.photoo.ui.screens.MapClusterDetailScreen
 import com.abel.photoo.ui.screens.MapScreen
 import com.abel.photoo.ui.screens.ReviewScreen
 import com.abel.photoo.ui.screens.SettingsScreen
@@ -91,6 +93,7 @@ import com.abel.photoo.ui.screens.SimilarScreen
 import com.abel.photoo.ui.screens.TimelineScreen
 import com.abel.photoo.ui.screens.TrashScreen
 import com.abel.photoo.ui.screens.ViewerScreen
+import com.abel.photoo.ui.util.Format
 
 /** 底部主 Tab。 */
 private enum class Tab(val label: String, val icon: ImageVector) {
@@ -158,6 +161,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     var trashOpen by rememberSaveable { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
     var similarDrillKey by remember { mutableStateOf<String?>(null) }
+    var mapCluster by remember { mutableStateOf<GeoCluster?>(null) }
 
     var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
@@ -281,6 +285,10 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onOpenPhoto = { list, photo ->
                         viewer = ViewerRequest(list.map { it.id }, photo.id)
                     },
+                    onOpenCluster = { cluster ->
+                        vm.clearSimilarPicks()
+                        mapCluster = cluster
+                    },
                 )
 
                 Tab.SIMILAR -> SimilarScreen(
@@ -338,6 +346,34 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         viewer = ViewerRequest(group.items.map { it.id }, photo.id)
                     },
                     onIgnore = { vm.resolveGroup(key) },
+                    onMovePicks = { pickerTargets = it },
+                )
+            }
+        }
+
+        // --------------------------------------------------- 地图地点相册覆盖层
+        mapCluster?.let { cluster ->
+            // 照片可能被删掉，这里始终按 id 取最新的一份；全没了就自动退出。
+            val live = remember(cluster, photos) {
+                val ids = cluster.photos.mapTo(HashSet()) { it.id }
+                photos.filter { it.id in ids }
+            }
+            if (live.isEmpty()) {
+                LaunchedEffect(Unit) { mapCluster = null }
+            } else {
+                val closeCluster = {
+                    vm.clearSimilarPicks()
+                    mapCluster = null
+                }
+                BackHandler(onBack = closeCluster)
+                MapClusterDetailScreen(
+                    vm = vm,
+                    title = cluster.place ?: Format.latLon(cluster.lat, cluster.lon),
+                    photos = live,
+                    onBack = closeCluster,
+                    onOpenPhoto = { photo ->
+                        viewer = ViewerRequest(live.map { it.id }, photo.id)
+                    },
                     onMovePicks = { pickerTargets = it },
                 )
             }

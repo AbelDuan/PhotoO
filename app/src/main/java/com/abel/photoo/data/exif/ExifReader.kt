@@ -48,6 +48,11 @@ class ExifReader(private val context: Context) {
 
     fun peek(id: Long): ExifInfo? = cache[id]
 
+    /** 给地图页按需反查地名用：只吃经纬度，不需要具体照片。 */
+    suspend fun geocode(lat: Double, lon: Double): String? = withContext(Dispatchers.IO) {
+        lookupPlace(lat, lon)
+    }
+
     fun clear() {
         cache.clear()
     }

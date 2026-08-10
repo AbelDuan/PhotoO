@@ -42,6 +42,8 @@ data class Settings(
     val gestureSensitivity: GestureSensitivity = GestureSensitivity.NORMAL,
     /** 打开 Live Photo 时自动播放。 */
     val liveAutoPlay: Boolean = true,
+    /** 高德地图 Web 端 key（可选）。留空则地图回退到离线示意图。 */
+    val amapKey: String = "",
 ) {
     fun gesture(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
 
@@ -84,6 +86,7 @@ class AppPrefs(context: Context) {
         },
         gestureSensitivity = sp.getString(KEY_SENSITIVITY, null).toEnum(GestureSensitivity.NORMAL),
         liveAutoPlay = sp.getBoolean(KEY_LIVE_AUTO, true),
+        amapKey = sp.getString(KEY_AMAP_KEY, "").orEmpty(),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -106,6 +109,7 @@ class AppPrefs(context: Context) {
             }
             putString(KEY_SENSITIVITY, next.gestureSensitivity.name)
             putBoolean(KEY_LIVE_AUTO, next.liveAutoPlay)
+            putString(KEY_AMAP_KEY, next.amapKey)
         }
     }
 
@@ -126,6 +130,7 @@ class AppPrefs(context: Context) {
 
     fun setGestureSensitivity(s: GestureSensitivity) = update { copy(gestureSensitivity = s) }
     fun setLiveAutoPlay(on: Boolean) = update { copy(liveAutoPlay = on) }
+    fun setAmapKey(key: String) = update { copy(amapKey = key.trim()) }
 
     fun resetGestures() = update {
         copy(
@@ -152,6 +157,7 @@ class AppPrefs(context: Context) {
         const val KEY_GESTURE_PREFIX = "gesture_"
         const val KEY_SENSITIVITY = "gesture_sensitivity"
         const val KEY_LIVE_AUTO = "live_auto_play"
+        const val KEY_AMAP_KEY = "amap_key"
         const val QUICK_DELIM = "\u001f"
     }
 }

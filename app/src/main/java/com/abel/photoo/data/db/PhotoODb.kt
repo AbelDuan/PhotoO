@@ -410,11 +410,16 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         val cachedPath: String?,
     )
 
-    /** 加载已识别的 Live Photo 记录（type!=0），用于刷新时直接复用、不重复扫描。 */
+    /**
+     * 加载全部 Live Photo 扫描结果，含 type==0 的"这张不是实况"。
+     *
+     * 负结果也要落库并读回来，否则每次启动都会把整库 JPEG 的文件头重读一遍——
+     * 那正是之前实况扫描又慢又像没生效的原因之一。
+     */
     fun loadLivePhotoMap(): Map<Long, LiveRow> {
         val out = HashMap<Long, LiveRow>()
         readableDatabase.rawQuery(
-            "SELECT media_id, type, video_offset, cached_path FROM live_photo WHERE type != 0",
+            "SELECT media_id, type, video_offset, cached_path FROM live_photo",
             null,
         ).use { c ->
             while (c.moveToNext()) {
@@ -458,6 +463,32 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
             "UPDATE live_photo SET cached_path = ? WHERE media_id = ?",
             arrayOf(path, id.toString()),
         )
+    }
+
+    /** 抽取阶段整文件扫描得到真实偏移后，回填偏移，下次无需再全扫。 */
+    fun setLiveOffset(id: Long, offset: Long) {
+        writableDatabase.execSQL(
+            "UPDATE live_photo SET video_offset = ? WHERE media_id = ?",
+            arrayOf<Any>(offset, id.toString()),
+        )
+    }
+
+    /** 批量写入实况扫描结果（含负结果）。 */
+    fun putLivePhotoBatch(rows: Collection<LiveRow>) {
+        if (rows.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            rows.forEach { putLivePhoto(it) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 清空实况识别结果，用于"重新扫描实况照片"。 */
+    fun clearLivePhotos() {
+        writableDatabase.execSQL("DELETE FROM live_photo")
     }
 
     // ------------------------------------------------------------- 拍摄坐标

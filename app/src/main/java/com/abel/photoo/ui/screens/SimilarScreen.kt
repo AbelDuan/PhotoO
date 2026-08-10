@@ -94,9 +94,16 @@ fun SimilarScreen(
     var showResolved by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRescan by remember { mutableStateOf(false) }
+    // 组的排序：默认最近拍的排前面，也可以反过来先看老照片。
+    var newestFirst by remember { mutableStateOf(true) }
 
-    val visibleGroups = remember(groups, showResolved) {
-        if (showResolved) groups else groups.filterNot { it.resolved }
+    val visibleGroups = remember(groups, showResolved, newestFirst) {
+        val base = if (showResolved) groups else groups.filterNot { it.resolved }
+        if (newestFirst) {
+            base.sortedByDescending { g -> g.items.maxOfOrNull { it.dateTaken } ?: 0L }
+        } else {
+            base.sortedBy { g -> g.items.minOfOrNull { it.dateTaken } ?: 0L }
+        }
     }
     val pickedBytes = remember(picks, groups) {
         groups.flatMap { it.items }.filter { it.id in picks }.sumOf { it.size }
@@ -136,6 +143,12 @@ fun SimilarScreen(
                         options = KeepStrategy.entries.map { it.label },
                         selectedIndex = KeepStrategy.entries.indexOf(settings.keepStrategy),
                         onSelect = { vm.setKeepStrategy(KeepStrategy.entries[it]) },
+                    )
+                    LabeledChips(
+                        label = "拍摄时间排序",
+                        options = listOf("由新到旧", "由旧到新"),
+                        selectedIndex = if (newestFirst) 0 else 1,
+                        onSelect = { newestFirst = it == 0 },
                     )
                     Text(
                         settings.keepStrategy.description,
@@ -488,9 +501,9 @@ private fun SimilarTile(
     }
 }
 
-/** 相似照片的多选操作条，列表页和组内详情页共用。 */
+/** 多选操作条：相似列表页、相似组详情、地图地点相册共用同一条。 */
 @Composable
-private fun SimilarBatchBar(
+internal fun SimilarBatchBar(
     count: Int,
     onSelectAll: () -> Unit,
     onMove: () -> Unit,
@@ -559,8 +572,9 @@ fun SimilarGroupDetailScreen(
     var confirmDelete by remember { mutableStateOf(false) }
 
     val ids = remember(group) { group.items.map { it.id } }
+    // buildSections 要求输入按时间倒序，这里统一排一次，组内顺序才稳定。
     val sections = remember(group, settings.grouping) {
-        Format.buildSections(group.items, settings.grouping)
+        Format.buildSections(group.items.sortedByDescending { it.dateTaken }, settings.grouping)
     }
 
     Scaffold(
