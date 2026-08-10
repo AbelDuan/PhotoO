@@ -53,9 +53,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -92,6 +94,8 @@ fun ViewerScreen(
     quickAlbums: List<String> = emptyList(),
     onMoveToQuickAlbum: (PhotoItem, String) -> Unit = { _, _ -> },
     onCreateQuickAlbum: (PhotoItem) -> Unit = { _ -> },
+    /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取）。 */
+    onResolveLiveVideo: suspend (PhotoItem) -> Uri? = { null },
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -109,6 +113,8 @@ fun ViewerScreen(
     var infoVisible by remember { mutableStateOf(false) }
     var zoomed by remember { mutableStateOf(false) }
     var livePlaying by remember { mutableStateOf(false) }
+    var liveUri by remember { mutableStateOf<Uri?>(null) }
+    val scope = rememberCoroutineScope()
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
@@ -116,6 +122,7 @@ fun ViewerScreen(
     // 相邻页的预载交给 HorizontalPager(beyondViewportPageCount=1)，这里只负责复位 Live 播放态。
     LaunchedEffect(pagerState, photos) {
         livePlaying = false
+        liveUri = null
         snapshotFlow { pagerState.currentPage }.collect { page ->
             photos.getOrNull(page)?.let(onRequestExif)
         }
@@ -181,7 +188,19 @@ fun ViewerScreen(
                     onMove = { current?.let(onMoveToAlbum) },
                     onDelete = { current?.let(onTrash) },
                     onInfo = { infoVisible = true },
-                    onPlayLive = if (current?.isLivePhoto == true) ({ livePlaying = true }) else null,
+                    onPlayLive = if (current?.isLivePhoto == true) {
+                        {
+                            scope.launch {
+                                current?.let { ph ->
+                                    val u = onResolveLiveVideo(ph)
+                                    if (u != null) {
+                                        liveUri = u
+                                        livePlaying = true
+                                    }
+                                }
+                            }
+                        }
+                    } else null,
                 )
             }
         }
@@ -201,13 +220,16 @@ fun ViewerScreen(
 
         // Live Photo 全屏播放覆盖层。
         AnimatedVisibility(
-            visible = livePlaying && current?.liveVideoUri != null,
+            visible = livePlaying && liveUri != null,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.Center),
         ) {
-            current?.liveVideoUri?.let { uri ->
-                LivePhotoPlayer(uri = uri, onClose = { livePlaying = false })
+            liveUri?.let { uri ->
+                LivePhotoPlayer(uri = uri, onClose = {
+                    livePlaying = false
+                    liveUri = null
+                })
             }
         }
     }

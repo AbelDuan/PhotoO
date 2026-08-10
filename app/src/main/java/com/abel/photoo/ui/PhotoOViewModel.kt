@@ -1,6 +1,7 @@
 package com.abel.photoo.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -190,6 +191,9 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     fun moveToAlbumByName(name: String, ids: Collection<Long>) {
         repo.moveToAlbumByName(name, ids)
     }
+
+    /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取并缓存）。 */
+    suspend fun resolveLiveVideo(photo: PhotoItem): Uri? = repo.resolveLiveVideo(photo)
 
     fun setQuickAlbums(list: List<String>) = prefs.setQuickAlbums(list)
 

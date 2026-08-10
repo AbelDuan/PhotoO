@@ -146,13 +146,19 @@ fun SettingsScreen(
                 if (albums.isEmpty()) {
                     Hint("还没有任何相册，先去相册页看看。")
                 } else {
+                    // 同一个相册名可能对应多个 bucket（如小米的"截图"出现在两个目录），
+                    // 这里按名字去重只显示一次，并保留照片数最多的那个作为代表，
+                    // 否则会出现"两个截图"且勾选一个另一个也联动勾选的问题。
+                    val uniqueAlbums = albums
+                        .groupBy { it.name }
+                        .map { (_, list) -> list.maxByOrNull { it.count }!! }
                     val picked = settings.quickAlbums.toSet()
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        albums.forEach { album ->
+                        uniqueAlbums.forEach { album ->
                             FilterChip(
                                 selected = album.name in picked,
                                 onClick = {

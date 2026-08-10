@@ -8,6 +8,7 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import com.abel.photoo.data.PhotoRepository
 import com.abel.photoo.data.media.MediaRequestBroker
+import com.abel.photoo.data.media.ThumbnailFetcherFactory
 import com.abel.photoo.data.prefs.AppPrefs
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +67,10 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
+            // 缩略图走系统缓存 + 自定义 Fetcher：离主线程取图、退出重进不重解码。
+            .components {
+                add(ThumbnailFetcherFactory(context.applicationContext))
+            }
             .memoryCache {
                 MemoryCache.Builder()
                     .maxSizeBytes(
@@ -73,6 +78,9 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
                     )
                     .build()
             }
+            // 不指定自定义磁盘缓存目录：用 Coil 默认（位于 cacheDir，跨启动持久），
+            // 缩略图的主要持久化由 ThumbnailFetcher 写入 cacheDir/thumbs/*.jpg 负责，
+            // 因此退出重进无需重新解码原图。
             .build()
 }
 

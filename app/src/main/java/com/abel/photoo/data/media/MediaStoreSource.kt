@@ -44,8 +44,9 @@ class MediaStoreSource(private val context: Context) {
 
     /** 读取全部图片。已被系统回收站隐藏的项默认不会返回。 */
     fun queryPhotos(): List<PhotoItem> {
-        // 一次性把缩略图、Live Photo 视频都预先查好，避免在每行循环里再发查询。
-        val thumbMap = queryThumbnailMap()
+        // 一次性把 Live Photo 视频预先查好，避免在每行循环里再发查询。
+        // 缩略图不再依赖 Thumbnails 表（API 30+ 该表大多为空），改由网格层用
+        // MediaStore.getThumbnail 在后台按单元格尺寸取系统缓存缩略图。
         val liveMap = queryLiveVideoMap()
 
         val out = ArrayList<PhotoItem>(512)
@@ -77,12 +78,11 @@ class MediaStoreSource(private val context: Context) {
                     val bucketName = c.getStringOrNull(bucketNameIdx)
                         ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
                     val fullUri = ContentUris.withAppendedId(collection, id)
-                    // 缩略图 uri：MediaStore 维护的 MINI_KIND 缩略图。注意 Thumbnails 表的
-                    // _ID 是缩略图自身 id，必须用 image_id 反查，直接 withAppendedId(uri, imageId)
-                    // 会指向不存在的行 → 整屏缩略图空白。查不到时退回全图，保证一定能显示。
-                    val thumbUri = thumbMap[id] ?: fullUri
+                    // thumbUri 仅作占位，真正高效缩略图由网格层用 MediaStore.getThumbnail 取得。
+                    val thumbUri = fullUri
                     val name = c.getStringOrNull(nameIdx).orEmpty()
                     // Live Photo：同 bucket 下存在同名视频（IMG_1234.HEIC + IMG_1234.MOV）。
+                    // 内嵌视频（小米等把实况写进 JPG）由后台扫描 XMP 检测，见 PhotoRepository.scanLivePhotos。
                     val stem = name.substringBeforeLast('.', name)
                     val live = liveMap[Pair(bucketId, stem)]
 
@@ -101,7 +101,7 @@ class MediaStoreSource(private val context: Context) {
                         height = c.getIntOrNull(heightIdx) ?: 0,
                         mimeType = c.getStringOrNull(mimeIdx).orEmpty(),
                         orientation = c.getIntOrNull(orientationIdx) ?: 0,
-                        isLivePhoto = live != null,
+                        liveType = if (live != null) 1 else 0,
                         liveVideoUri = live,
                     )
                 } catch (e: Throwable) {
@@ -113,39 +113,6 @@ class MediaStoreSource(private val context: Context) {
         }
 
         out.sortByDescending { it.dateTaken }
-        return out
-    }
-
-    /**
-     * 批量构建 image_id → 缩略图内容 Uri 映射。
-     * Thumbnails 表一行对应一张缩略图，_ID 是缩略图自己的主键，IMAGE_ID 才指向原图。
-     * 优先取 MINI_KIND（尺寸够网格用且体积小）。
-     */
-    @Suppress("DEPRECATION")
-    private fun queryThumbnailMap(): Map<Long, Uri> {
-        val out = HashMap<Long, Uri>()
-        val uri = MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI
-        val proj = arrayOf(
-            MediaStore.Images.Thumbnails._ID,
-            MediaStore.Images.Thumbnails.IMAGE_ID,
-            MediaStore.Images.Thumbnails.KIND,
-        )
-        runCatching {
-            context.contentResolver.query(uri, proj, null, null, null)
-        }.getOrNull()?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Thumbnails._ID)
-            val imageIdIdx = c.getColumnIndexOrThrow(MediaStore.Images.Thumbnails.IMAGE_ID)
-            val kindIdx = c.getColumnIndexOrThrow(MediaStore.Images.Thumbnails.KIND)
-            while (c.moveToNext()) {
-                val imageId = c.getLong(imageIdIdx)
-                val kind = c.getInt(kindIdx)
-                val existing = out[imageId]
-                // 第一次直接放；之后若遇到 MINI_KIND 则覆盖（MICRO_KIND 让位）。
-                if (existing == null || kind == MediaStore.Images.Thumbnails.MINI_KIND) {
-                    out[imageId] = ContentUris.withAppendedId(uri, c.getLong(idIdx))
-                }
-            }
-        }
         return out
     }
 

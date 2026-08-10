@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.abel.photoo.data.media.Thumbs
+import com.abel.photoo.data.media.ThumbRequest
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.TimelineSection
 import com.abel.photoo.ui.util.Format
@@ -56,10 +58,9 @@ fun PhotoThumb(
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        // thumbUri 在 MediaStoreSource 里已经做了回退：查不到缩略图时直接就是全图 Uri，
-        // 所以这里无需额外 error 兜底，加载路径最短。
+        // 用系统缩略图服务按单元格尺寸取图（后台线程、系统缓存），比直接解码原图快很多。
         AsyncImage(
-            model = photo.thumbUri,
+            model = ThumbRequest(photo.uri, Thumbs.TARGET),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
             modifier = Modifier
@@ -245,7 +246,7 @@ fun AlbumCard(
         ) {
             if (coverUri != null) {
                 AsyncImage(
-                    model = coverUri,
+                    model = ThumbRequest(coverUri, Thumbs.TARGET),
                     contentDescription = name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

@@ -23,10 +23,18 @@ data class PhotoItem(
     val reviewed: Boolean = false,
     val reviewAction: ReviewAction = ReviewAction.NONE,
     val favorite: Boolean = false,
-    /** Live Photo：同相册目录下存在同名 .mov/.mp4 视频。 */
-    val isLivePhoto: Boolean = false,
+    /**
+     * Live Photo 类型：0 无；1 同相册目录下存在同名 .mov/.mp4 视频文件；
+     * 2 图片文件内部内嵌视频流（小米/华为/部分机型把实况视频直接写进 JPG）。
+     */
+    val liveType: Int = 0,
+    /** 仅 type==1 使用：同名视频的内容 Uri。 */
     val liveVideoUri: Uri? = null,
+    /** 仅 type==2 使用：内嵌视频在图片文件中的字节偏移（从文件头算起）。 */
+    val liveOffset: Long = 0,
 ) {
+    /** 是否为 Live Photo（任一类型都算）。 */
+    val isLivePhoto: Boolean get() = liveType != 0
     val pixels: Long get() = width.toLong() * height.toLong()
 }
 

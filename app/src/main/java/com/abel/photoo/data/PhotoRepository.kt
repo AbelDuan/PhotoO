@@ -99,7 +99,11 @@ class PhotoRepository(
     fun startObserving() {
         if (observing) return
         observing = true
-        scope.launch { refresh() }
+        scope.launch {
+            refresh()
+            // 刷新后后台扫描内嵌 Live Photo（小米等把实况写进 JPG），识别结果落库复用。
+            scanLivePhotos()
+        }
         source.observeChanges()
             .drop(1)                 // 注册时会立刻发一次，跳过它避免重复加载
             .debounce(700)
@@ -116,6 +120,8 @@ class PhotoRepository(
             val states = withContext(Dispatchers.IO) { db.loadAllStates() }
             val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
             val customAlbums = withContext(Dispatchers.IO) { db.listCustomAlbums() }
+            // 已识别的 Live Photo（尤其是内嵌视频）落库后直接复用，避免每次重扫。
+            val liveMap = withContext(Dispatchers.IO) { db.loadLivePhotoMap() }
 
             val liveIds = raw.mapTo(HashSet(raw.size)) { it.id }
             // 系统里已经消失的条目，回收站里也要清掉，否则会留下点不开的空壳。
@@ -127,11 +133,17 @@ class PhotoRepository(
 
             val decorated = raw.map { p ->
                 val s = states[p.id]
-                if (s == null) p else p.copy(
+                var cp = if (s == null) p else p.copy(
                     reviewed = s.reviewed,
                     reviewAction = s.action,
                     favorite = s.favorite,
                 )
+                // 复用已持久化的内嵌 Live Photo 识别结果。
+                val lv = liveMap[p.id]
+                if (lv != null && lv.type == 2) {
+                    cp = cp.copy(liveType = 2, liveOffset = lv.videoOffset)
+                }
+                cp
             }
             val visible = decorated.filter { it.id !in trashIds }
 
@@ -495,13 +507,163 @@ class PhotoRepository(
      */
     fun moveToAlbumByName(name: String, ids: Collection<Long>) {
         if (ids.isEmpty()) return
-        val album = _albums.value.firstOrNull { it.name == name }
+        // 同名的相册可能对应多个 bucket（如小米的"截图"在两个目录都有），
+        // 优先选 DCIM 下或照片数最多的那个，保证归入到用户预期的位置。
+        val album = _albums.value.filter { it.name == name }.maxByOrNull {
+            if (it.relativePath.contains("DCIM", ignoreCase = true)) Int.MAX_VALUE else it.count
+        } ?: _albums.value.firstOrNull { it.name == name }
         if (album == null) {
             emit("没有相册「$name」，请先在设置里添加快捷相册")
             return
         }
         moveToAlbum(ids, album)
     }
+
+    // ------------------------------------------------------------------ Live Photo
+
+    /**
+     * 后台扫描"图片文件内嵌视频"型 Live Photo（小米/华为等把实况视频直接写进 JPG 的 XMP）。
+     *
+     * 只扫 JPEG、只读本文件头部约 256KB（XMP 元数据在文件开头），不在主线程、不读整张原图，
+     * 因此即便几千张照片也只是一段一次性的后台 IO，识别结果写入 [PhotoODb.live_photo] 表，
+     * 下次启动直接复用、不再重扫。同目录同名视频文件（type==1）由 queryPhotos 同步识别，不在此处理。
+     */
+    fun scanLivePhotos() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val known = db.loadLivePhotoMap()
+                val photos = _photos.value
+                // 已经识别过的（含落库的内嵌/外部）跳过。
+                val toCheck = photos.filter {
+                    it.liveType == 0 && it.mimeType.startsWith("image/jpeg") && it.id !in known
+                }
+                val pending = toCheck.toMutableList()
+                // 分块扫描，每处理若干张让出一次，避免长期占用 IO 线程影响其它加载。
+                pending.chunked(40).forEach { chunk ->
+                    if (!isActive) return@launch
+                    val updates = HashMap<Long, Long>() // id -> offset
+                    chunk.forEach { photo ->
+                        val offset = detectEmbeddedLive(photo.uri)
+                        if (offset > 0) {
+                            db.putLivePhoto(
+                                PhotoODb.LiveRow(id = photo.id, type = 2, videoOffset = offset, cachedPath = null)
+                            )
+                            updates[photo.id] = offset
+                        }
+                    }
+                    if (updates.isNotEmpty()) {
+                        _photos.value = _photos.value.map { p ->
+                            updates[p.id]?.let { off -> p.copy(liveType = 2, liveOffset = off) } ?: p
+                        }
+                    }
+                    kotlinx.coroutines.yield()
+                }
+            } catch (e: Throwable) {
+                Log.w("PhotoO", "scanLivePhotos failed", e)
+            }
+        }
+    }
+
+    /**
+     * 解析某张 Live Photo 的可播放视频 Uri。
+     * - type==1：直接返回同名视频的内容 Uri。
+     * - type==2：首次播放时从图片文件抽取内嵌视频到缓存目录（只做一次，路径落库），
+     *            之后直接返回缓存文件 Uri。
+     */
+    suspend fun resolveLiveVideo(photo: PhotoItem): Uri? {
+        return withContext(Dispatchers.IO) {
+            when (photo.liveType) {
+                1 -> photo.liveVideoUri
+                2 -> {
+                    val cached = db.getLiveCachePath(photo.id)
+                    if (cached != null) return@withContext Uri.fromFile(java.io.File(cached))
+                    val dir = java.io.File(context.cacheDir, "livephoto").also { it.mkdirs() }
+                    val out = java.io.File(dir, "${photo.id}.mp4")
+                    if (extractEmbeddedVideo(photo, out)) {
+                        db.setLiveCachePath(photo.id, out.absolutePath)
+                        Uri.fromFile(out)
+                    } else null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * 读取 JPEG 头部，从 XMP 里找内嵌视频的字节偏移。
+     * 覆盖 Google Motion Photo / 小米(HyperOS) / 华为 / Pixel 用的 GCamera:MicroVideo 方案：
+     * XMP 中 `GCamera:MicroVideoOffset="N"` 表示视频流从文件头第 N 字节开始。
+     * 读不到或解析失败返回 0（不是 Live Photo）。
+     */
+    private fun detectEmbeddedLive(uri: Uri): Long {
+        return runCatching {
+            val head = ByteArray(256 * 1024)
+            val read = resolver().openInputStream(uri)?.use { it.read(head) } ?: return 0
+            if (read <= 0) return 0
+            val text = String(head, 0, read, Charsets.US_ASCII)
+            // 必须先确认这是带 Motion Photo 标记的 JPEG，再取偏移，避免误判。
+            val hasMarker = text.contains("MicroVideo", ignoreCase = true) ||
+                text.contains("MotionPhoto", ignoreCase = true) ||
+                text.contains("Camera:MotionPhoto", ignoreCase = true)
+            if (!hasMarker) return 0
+            // 取 MicroVideoOffset / MotionPhoto 的偏移数值（从文件头算起）。
+            val regex = Regex("""(?:GCamera:)?MicroVideoOffset["']?\s*[:=]\s*['"]?(\d+)""", RegexOption.IGNORE_CASE)
+            val m = regex.find(text) ?: return 0
+            m.groupValues[1].toLongOrNull() ?: 0L
+        }.getOrDefault(0L)
+    }
+
+    /** 从图片文件抽取内嵌视频字节到 out 文件；校验魔数，失败尝试从文件尾部偏移。 */
+    private fun extractEmbeddedVideo(photo: PhotoItem, out: java.io.File): Boolean {
+        return runCatching {
+            val resolver = resolver()
+            // 优先：偏移从文件头算起。
+            if (tryExtract(resolver, photo.uri, photo.liveOffset, out)
+                && isValidVideo(out)
+            ) return@runCatching true
+            // 回退：部分机型偏移是从文件尾算起的剩余字节长度。
+            val fromEnd = (photo.size - photo.liveOffset).coerceAtLeast(0)
+            if (fromEnd > 0 && tryExtract(resolver, photo.uri, fromEnd, out) && isValidVideo(out)
+            ) return@runCatching true
+            false
+        }.getOrDefault(false)
+    }
+
+    private fun tryExtract(resolver: android.content.ContentResolver, uri: Uri, skip: Long, out: java.io.File): Boolean {
+        resolver.openInputStream(uri)?.use { input ->
+            val buffered = java.io.BufferedInputStream(input)
+            // 跳过指定字节。
+            var remaining = skip
+            val buf = ByteArray(8192)
+            while (remaining > 0) {
+                val n = buffered.read(buf, 0, minOf(buf.size, remaining.toInt()))
+                if (n < 0) break
+                remaining -= n
+            }
+            out.outputStream().use { outStream ->
+                var total = 0L
+                var r: Int
+                while (buffered.read(buf).also { r = it } >= 0) {
+                    outStream.write(buf, 0, r)
+                    total += r
+                    if (total > 200L * 1024 * 1024) break // 安全上限
+                }
+            }
+        }
+        return out.exists() && out.length() > 0
+    }
+
+    /** 简单校验抽出来的确实是视频（ISO BMFF：以 ftyp 开头）。 */
+    private fun isValidVideo(file: java.io.File): Boolean {
+        if (!file.exists() || file.length() < 12) return false
+        val head = ByteArray(12)
+        file.inputStream().use { it.read(head) }
+        // ....ftyp 或 ID3/写死的 mp4 标记。
+        return head[4] == 'f'.code.toByte() && head[5] == 't'.code.toByte() &&
+            head[6] == 'y'.code.toByte() && head[7] == 'p'.code.toByte()
+    }
+
+    private fun resolver() = context.contentResolver
 
     // ------------------------------------------------------------------ 相似图
 

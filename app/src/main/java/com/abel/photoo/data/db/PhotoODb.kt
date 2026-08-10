@@ -3,6 +3,7 @@ package com.abel.photoo.data.db
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import java.io.File
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.getStringOrNull
@@ -88,16 +89,33 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
+
+        db.execSQL(
+            """
+            CREATE TABLE live_photo (
+                media_id     INTEGER PRIMARY KEY,
+                type         INTEGER NOT NULL DEFAULT 0,
+                video_offset INTEGER NOT NULL DEFAULT 0,
+                cached_path  TEXT
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 本地状态属于可重建的缓存数据，升级时直接重来最简单也最安全。
-        db.execSQL("DROP TABLE IF EXISTS photo_state")
-        db.execSQL("DROP TABLE IF EXISTS trash_item")
-        db.execSQL("DROP TABLE IF EXISTS photo_hash")
-        db.execSQL("DROP TABLE IF EXISTS custom_album")
-        db.execSQL("DROP TABLE IF EXISTS group_decision")
-        onCreate(db)
+        // 只在需要新增表时追加，绝不 DROP 已有数据（相似哈希/回收站对用户有价值）。
+        if (oldVersion < 2) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS live_photo (
+                    media_id     INTEGER PRIMARY KEY,
+                    type         INTEGER NOT NULL DEFAULT 0,
+                    video_offset INTEGER NOT NULL DEFAULT 0,
+                    cached_path  TEXT
+                )
+                """.trimIndent()
+            )
+        }
     }
 
     // ---------------------------------------------------------------- 处理状态
@@ -375,6 +393,68 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         writableDatabase.execSQL("DELETE FROM group_decision")
     }
 
+    // --------------------------------------------------------------- Live Photo
+
+    data class LiveRow(
+        val id: Long,
+        /** 0 无, 1 同名视频文件, 2 图片内嵌视频流。 */
+        val type: Int,
+        /** type==2 时：内嵌视频在图片文件中的字节偏移。 */
+        val videoOffset: Long,
+        /** type==2 时：抽取后的视频缓存文件路径（首次播放时生成）。 */
+        val cachedPath: String?,
+    )
+
+    /** 加载已识别的 Live Photo 记录（type!=0），用于刷新时直接复用、不重复扫描。 */
+    fun loadLivePhotoMap(): Map<Long, LiveRow> {
+        val out = HashMap<Long, LiveRow>()
+        readableDatabase.rawQuery(
+            "SELECT media_id, type, video_offset, cached_path FROM live_photo WHERE type != 0",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                out[c.getLong(0)] = LiveRow(
+                    id = c.getLong(0),
+                    type = c.getInt(1),
+                    videoOffset = c.getLong(2),
+                    cachedPath = c.getStringOrNull(3),
+                )
+            }
+        }
+        return out
+    }
+
+    fun putLivePhoto(row: LiveRow) {
+        val values = ContentValues().apply {
+            put("media_id", row.id)
+            put("type", row.type)
+            put("video_offset", row.videoOffset)
+            put("cached_path", row.cachedPath)
+        }
+        writableDatabase.insertWithOnConflict("live_photo", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** 读取已缓存的内嵌视频路径（若存在且文件仍存在则返回，否则返回 null）。 */
+    fun getLiveCachePath(id: Long): String? {
+        readableDatabase.rawQuery(
+            "SELECT cached_path FROM live_photo WHERE media_id = ?",
+            arrayOf(id.toString()),
+        ).use { c ->
+            if (c.moveToFirst()) {
+                val p = c.getStringOrNull(0)
+                if (p != null && File(p).exists()) return p
+            }
+        }
+        return null
+    }
+
+    fun setLiveCachePath(id: Long, path: String) {
+        writableDatabase.execSQL(
+            "UPDATE live_photo SET cached_path = ? WHERE media_id = ?",
+            arrayOf(path, id.toString()),
+        )
+    }
+
     // ------------------------------------------------------------------ 工具
 
     private inline fun SQLiteDatabase.transaction(block: (SQLiteDatabase) -> Unit) {
@@ -392,6 +472,6 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "photoo.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
     }
 }

@@ -352,6 +352,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     quickAlbums = vm.prefs.current.quickAlbums,
                     onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
                     onCreateQuickAlbum = { photo -> quickCreate = photo },
+                    onResolveLiveVideo = { vm.resolveLiveVideo(it) },
                 )
             }
         }
