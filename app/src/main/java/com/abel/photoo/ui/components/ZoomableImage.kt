@@ -61,6 +61,8 @@ fun ZoomableImage(
     horizontalEnabled: Boolean = false,
     /** 哪些方向触发后要做"整张图飞出淡出"的动画（退出 / 删除这类动作）。 */
     flyOut: (GestureDirection) -> Boolean = { false },
+    /** 飞出动画刚开始时回调（在延时真正处理之前），用于立刻停掉 Live 等副作用。 */
+    onFlyStart: (GestureDirection) -> Unit = {},
     /**
      * 盖在图片之上的内容（Live Photo 视频层）。
      *
@@ -214,6 +216,7 @@ fun ZoomableImage(
                             // （仓库层已是内存隐藏，无需整库刷新）。
                             exitDir = dir
                             exiting = true
+                            onFlyStart(dir)
                             scope.launch { kotlinx.coroutines.delay(240); onSwipe(dir) }
                         } else {
                             dragX = 0f

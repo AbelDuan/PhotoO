@@ -310,8 +310,13 @@ class PhotoRepository(
             // 关键：内存内立即隐藏，列表/大图瞬间更新，不再全量重查 MediaStore
             // （之前上滑"等一会"的根因就是 refresh() 把整库重新拉了一遍）。
             _photos.value = _photos.value.filterNot { it.id in idSet }
+            // 同步把被删照片从相似组里剔除，否则相似组 / 详情页的缩略图还留在原处。
+            _similarGroups.value = _similarGroups.value.map { g ->
+                if (g.items.any { it.id in idSet }) {
+                    g.copy(items = g.items.filterNot { it.id in idSet })
+                } else g
+            }
             recomputeDerived()
-            emit("已移入回收站 ${rows.size} 张")
         }
     }
 

@@ -56,6 +56,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -175,6 +177,23 @@ fun PhotoORoot(vm: PhotoOViewModel) {
         vm.messages.collect { text ->
             snackbar.currentSnackbarData?.dismiss()
             snackbar.showSnackbar(text)
+        }
+    }
+
+    // 删除后弹出"撤销"：用户点撤销就把刚移入回收站的照片放回图库。
+    LaunchedEffect(Unit) {
+        vm.undoEvent.collect { ev ->
+            if (ev == null) return@collect
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar(
+                message = "已移入回收站 ${ev.count} 张",
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                vm.undoLastTrash()
+            }
+            vm.clearUndoEvent()
         }
     }
 
@@ -332,23 +351,24 @@ fun PhotoORoot(vm: PhotoOViewModel) {
 
         // ----------------------------------------------------- 相似组详情覆盖层
         similarDrillKey?.let { key ->
-            val group = similarGroups.firstOrNull { it.key == key }
-            if (group == null) {
-                LaunchedEffect(Unit) { similarDrillKey = null }
-            } else {
-                val closeDetail = { similarDrillKey = null }
-                BackHandler(onBack = closeDetail)
-                SimilarGroupDetailScreen(
-                    vm = vm,
-                    group = group,
-                    onBack = closeDetail,
-                    onOpenPhoto = { photo ->
-                        viewer = ViewerRequest(group.items.map { it.id }, photo.id)
-                    },
-                    onIgnore = { vm.resolveGroup(key) },
-                    onMovePicks = { pickerTargets = it },
-                )
+            val closeDetail = {
+                vm.clearSimilarPicks()
+                similarDrillKey = null
             }
+            BackHandler(onBack = closeDetail)
+            SimilarGroupDetailScreen(
+                vm = vm,
+                groups = similarGroups,
+                currentKey = key,
+                onBack = closeDetail,
+                onOpenPhoto = { photo ->
+                    val g = similarGroups.firstOrNull { it.key == key }
+                    viewer = ViewerRequest(g?.items?.map { it.id }.orEmpty(), photo.id)
+                },
+                onIgnore = { vm.resolveGroup(key) },
+                onMovePicks = { pickerTargets = it },
+                onNavigateToGroup = { similarDrillKey = it },
+            )
         }
 
         // --------------------------------------------------- 地图地点相册覆盖层

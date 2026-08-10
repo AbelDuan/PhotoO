@@ -25,6 +25,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
+ * "撤销"动作携带的信息：最近一次移入回收站的照片数量与 id 集合。
+ * 界面据此弹出带"撤销"按钮的 Snackbar，点击后把这些照片放回图库。
+ */
+data class UndoEvent(val count: Int, val ids: Set<Long>)
+
+/**
  * 全应用共用的一个 ViewModel。
  *
  * 这个应用的各个界面共享同一份图库快照与同一套选择状态（在时间线里选中的照片，
@@ -47,6 +53,9 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     val loading = repo.loading
     val messages = repo.messages
     val settings = prefs.settings
+    /** 设置页二级分组收起状态（持久化），供设置页记忆展开/收起。 */
+    val collapsedGroups = prefs.collapsedGroups
+    fun setGroupExpanded(key: String, expanded: Boolean) = prefs.setGroupExpanded(key, expanded)
     val geoPoints = repo.geoPoints
     val geoScanState = repo.geoScanState
 
@@ -73,6 +82,23 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _exifCache = MutableStateFlow<Map<Long, ExifInfo>>(emptyMap())
     val exifCache: StateFlow<Map<Long, ExifInfo>> = _exifCache.asStateFlow()
+
+    /**
+     * 最近一次"移入回收站"操作携带的照片 id，供界面弹出"撤销"动作恢复。
+     * 撤销只把照片从回收站放回图库（不回退相似组的已处理标记）。
+     */
+    private val _undoEvent = MutableStateFlow<UndoEvent?>(null)
+    val undoEvent: StateFlow<UndoEvent?> = _undoEvent.asStateFlow()
+
+    fun undoLastTrash() {
+        val ev = _undoEvent.value ?: return
+        repo.restoreFromTrash(ev.ids)
+        _undoEvent.value = null
+    }
+
+    fun clearUndoEvent() {
+        _undoEvent.value = null
+    }
 
     private var permissionReady = false
 
@@ -161,6 +187,7 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         if (keepers.isNotEmpty()) repo.markReviewed(keepers, ReviewAction.KEPT)
         affected.forEach { repo.resolveGroup(it.key) }
         _similarPicks.value = emptySet()
+        if (ids.isNotEmpty()) _undoEvent.value = UndoEvent(ids.size, ids)
     }
 
     // ------------------------------------------------------------------ EXIF
@@ -177,8 +204,10 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ 转发给数据层
 
     fun moveToTrash(ids: Collection<Long>) {
-        repo.moveToTrash(ids)
-        _selection.value = _selection.value - ids.toSet()
+        val set = ids.toSet()
+        repo.moveToTrash(set)
+        _selection.value = _selection.value - set
+        if (set.isNotEmpty()) _undoEvent.value = UndoEvent(set.size, set)
     }
 
     fun restore(ids: Collection<Long>) = repo.restoreFromTrash(ids)

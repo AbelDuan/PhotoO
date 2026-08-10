@@ -69,6 +69,14 @@ class AppPrefs(context: Context) {
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
+    /** 设置页各二级分组是否收起（持久化）。默认全部展开，只记"收起"的那几个。 */
+    private val _collapsedGroups = MutableStateFlow(loadCollapsed())
+    val collapsedGroups: StateFlow<Set<String>> = _collapsedGroups.asStateFlow()
+
+    private fun loadCollapsed(): Set<String> =
+        sp.getString(KEY_GROUP_COLLAPSED, "").orEmpty()
+            .split(',').filter { it.isNotEmpty() }.toSet()
+
     val current: Settings get() = _settings.value
 
     private fun load() = Settings(
@@ -142,6 +150,14 @@ class AppPrefs(context: Context) {
     fun setAmapKey(key: String) = update { copy(amapKey = key.trim()) }
     fun setAmapCloud(on: Boolean) = update { copy(amapCloud = on) }
 
+    fun isGroupExpanded(key: String): Boolean = !_collapsedGroups.value.contains(key)
+    fun setGroupExpanded(key: String, expanded: Boolean) {
+        val next = if (expanded) _collapsedGroups.value - key
+        else _collapsedGroups.value + key
+        _collapsedGroups.value = next
+        sp.edit { putString(KEY_GROUP_COLLAPSED, next.joinToString(",")) }
+    }
+
     fun resetGestures() = update {
         copy(
             gestures = GestureDirection.entries.associateWith { it.default },
@@ -170,6 +186,7 @@ class AppPrefs(context: Context) {
         const val KEY_LIVE_MUTED_DEFAULT = "live_muted_default"
         const val KEY_AMAP_KEY = "amap_key"
         const val KEY_AMAP_CLOUD = "amap_cloud"
+        const val KEY_GROUP_COLLAPSED = "group_collapsed"
         const val QUICK_DELIM = "\u001f"
     }
 }

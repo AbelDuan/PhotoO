@@ -296,6 +296,9 @@ fun ViewerScreen(
                     // 只有"删除 / 退出"这类动作值得整张图飞出去；翻页飞出反而奇怪。
                     actionOf(dir) == GestureAction.TRASH || actionOf(dir) == GestureAction.CLOSE
                 },
+                // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
+                // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
+                onFlyStart = { livePlaying = false },
                 onZoomChanged = { if (isCurrent) zoomed = it },
                 overlay = if (isCurrent && livePlaying && liveUri != null) {
                     {

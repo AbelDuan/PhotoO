@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
@@ -60,6 +61,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.LaunchedEffect
 import coil3.compose.AsyncImage
 import com.abel.photoo.model.KeepStrategy
 import com.abel.photoo.model.PhotoItem
@@ -561,20 +563,44 @@ private fun BatchAct(
 @Composable
 fun SimilarGroupDetailScreen(
     vm: PhotoOViewModel,
-    group: SimilarGroup,
+    groups: List<SimilarGroup>,
+    currentKey: String,
     onBack: () -> Unit,
     onOpenPhoto: (PhotoItem) -> Unit,
     onIgnore: () -> Unit,
     onMovePicks: (List<Long>) -> Unit,
+    onNavigateToGroup: (String) -> Unit,
 ) {
     val picks by vm.similarPicks.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf(false) }
 
+    val group = groups.firstOrNull { it.key == currentKey }
+    // 当前组被删空或已不在列表里时，自动退出详情。
+    LaunchedEffect(group) { if (group == null) onBack() }
+    if (group == null) return
+
+    val index = groups.indexOfFirst { it.key == currentKey }
+    val prevKey = if (index > 0) groups[index - 1].key else null
+    val nextKey = if (index in 0 until groups.lastIndex) groups[index + 1].key else null
+
     val ids = remember(group) { group.items.map { it.id } }
     // buildSections 要求输入按时间倒序，这里统一排一次，组内顺序才稳定。
     val sections = remember(group, settings.grouping) {
         Format.buildSections(group.items.sortedByDescending { it.dateTaken }, settings.grouping)
+    }
+
+    // 一组只保留 1 张（其余都删了）时，自动跳到下一组（优先往后，没有则往前），
+    // 没有可跳的组就退出，避免停在一张没法再整理的孤图上。
+    var lastSize by remember { mutableStateOf(group.size) }
+    LaunchedEffect(group.size) {
+        val s = group.size
+        if (s <= 1 && lastSize > 1) {
+            val target = groups.drop(index + 1).firstOrNull { !it.resolved && it.size > 1 }?.key
+                ?: groups.take(index).lastOrNull { !it.resolved && it.size > 1 }?.key
+            if (target != null) onNavigateToGroup(target) else onBack()
+        }
+        lastSize = s
     }
 
     Scaffold(
@@ -596,6 +622,14 @@ fun SimilarGroupDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { if (prevKey != null) onNavigateToGroup(prevKey) },
+                        enabled = prevKey != null,
+                    ) { Icon(Icons.Rounded.ChevronLeft, "上一组") }
+                    IconButton(
+                        onClick = { if (nextKey != null) onNavigateToGroup(nextKey) },
+                        enabled = nextKey != null,
+                    ) { Icon(Icons.Rounded.ChevronRight, "下一组") }
                     if (group.resolved) {
                         Text(
                             "已处理",

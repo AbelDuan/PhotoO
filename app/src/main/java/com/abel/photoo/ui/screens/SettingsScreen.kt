@@ -74,6 +74,10 @@ fun SettingsScreen(
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // 各二级分组的收起状态（持久化）；默认全部展开，仅"大图手势"默认收起。
+    val collapsed by vm.collapsedGroups.collectAsStateWithLifecycle()
+    val defaultCollapsed = setOf("gesture")
+    val grpExpanded: (String) -> Boolean = { !(collapsed + defaultCollapsed).contains(it) }
     val stats by vm.stats.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
     val albums by vm.albums.collectAsStateWithLifecycle()
@@ -92,7 +96,8 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item("appearance") {
-            SettingsGroup("外观", Icons.Rounded.Palette) {
+            SettingsGroup("外观", Icons.Rounded.Palette, "appearance",
+                grpExpanded("appearance"), { vm.setGroupExpanded("appearance", it) }) {
                 RowLabel("主题")
                 ChipRow(
                     options = ThemeMode.entries,
@@ -110,7 +115,8 @@ fun SettingsScreen(
         }
 
         item("grid") {
-            SettingsGroup("网格", Icons.Rounded.GridView) {
+            SettingsGroup("网格", Icons.Rounded.GridView, "grid",
+                grpExpanded("grid"), { vm.setGroupExpanded("grid", it) }) {
                 RowLabel("每行照片数")
                 ChipRow(
                     options = listOf(2, 3, 4, 5, 6),
@@ -122,7 +128,8 @@ fun SettingsScreen(
         }
 
         item("gesture") {
-            SettingsGroup("大图手势", Icons.Rounded.Swipe, initiallyExpanded = false) {
+            SettingsGroup("大图手势", Icons.Rounded.Swipe, "gesture",
+                grpExpanded("gesture"), { vm.setGroupExpanded("gesture", it) }) {
                 Hint("给四个滑动方向各绑一个动作。左右保持「下一张 / 上一张」时用系统翻页，跟手最顺；改成别的动作后翻页交给手势判定。")
                 GestureDirection.entries.forEach { dir ->
                     RowLabel(dir.label)
@@ -151,7 +158,8 @@ fun SettingsScreen(
         }
 
         item("live") {
-            SettingsGroup("Live Photo", Icons.Rounded.MotionPhotosOn) {
+            SettingsGroup("Live Photo", Icons.Rounded.MotionPhotosOn, "live",
+                grpExpanded("live"), { vm.setGroupExpanded("live", it) }) {
                 Hint("实况照片自动识别：进入大图即自动播放一次，无需任何开关。")
                 SwitchRow(
                     title = "Live Photo 默认静音",
@@ -163,7 +171,8 @@ fun SettingsScreen(
         }
 
         item("similar") {
-            SettingsGroup("相似照片", Icons.Rounded.Tune) {
+            SettingsGroup("相似照片", Icons.Rounded.Tune, "similar",
+                grpExpanded("similar"), { vm.setGroupExpanded("similar", it) }) {
                 RowLabel("相似度判定")
                 ChipRow(
                     options = SimilarityLevel.entries,
@@ -195,7 +204,8 @@ fun SettingsScreen(
         }
 
         item("quick") {
-            SettingsGroup("快捷归入", Icons.Rounded.Folder) {
+            SettingsGroup("快捷归入", Icons.Rounded.Folder, "quick",
+                grpExpanded("quick"), { vm.setGroupExpanded("quick", it) }) {
                 Hint("选中的相册会出现在大图页底部，点一下即可把当前照片归入，免去每次走相册选择器。")
                 if (albums.isEmpty()) {
                     Hint("还没有任何相册，先去相册页看看。")
@@ -232,7 +242,8 @@ fun SettingsScreen(
         }
 
         item("delete") {
-            SettingsGroup("删除与回收站", Icons.Rounded.Delete) {
+            SettingsGroup("删除与回收站", Icons.Rounded.Delete, "delete",
+                grpExpanded("delete"), { vm.setGroupExpanded("delete", it) }) {
                 SwitchRow(
                     title = "同时移入系统回收站",
                     subtitle = "开启后上滑删除会一并调用系统回收站（需确认弹窗）；" +
@@ -250,7 +261,8 @@ fun SettingsScreen(
         }
 
         item("review") {
-            SettingsGroup("整理", Icons.Rounded.Autorenew) {
+            SettingsGroup("整理", Icons.Rounded.Autorenew, "review",
+                grpExpanded("review"), { vm.setGroupExpanded("review", it) }) {
                 SwitchRow(
                     title = "启动时继续整理",
                     subtitle = "有未处理照片时，打开应用直接进入筛选界面",
@@ -268,7 +280,8 @@ fun SettingsScreen(
         }
 
         item("privacy") {
-            SettingsGroup("隐私", Icons.Rounded.Place) {
+            SettingsGroup("隐私", Icons.Rounded.Place, "privacy",
+                grpExpanded("privacy"), { vm.setGroupExpanded("privacy", it) }) {
                 SwitchRow(
                     title = "解析拍摄地点",
                     subtitle = "把 EXIF 里的经纬度反查成地名，全部在本机离线完成",
@@ -279,7 +292,8 @@ fun SettingsScreen(
         }
 
         item("map") {
-            SettingsGroup("地图", Icons.Rounded.Place) {
+            SettingsGroup("地图", Icons.Rounded.Place, "map",
+                grpExpanded("map"), { vm.setGroupExpanded("map", it) }) {
                 Hint("地图 Tab 要显示可缩放的真实地图、并联网解析拍摄点地址，需要一个高德地图 Key（JS API 类型）。")
                 var keyText by remember { mutableStateOf(settings.amapKey) }
                 OutlinedTextField(
@@ -308,7 +322,8 @@ fun SettingsScreen(
         }
 
         item("about") {
-            SettingsGroup("关于", Icons.Rounded.Info) {
+            SettingsGroup("关于", Icons.Rounded.Info, "about",
+                grpExpanded("about"), { vm.setGroupExpanded("about", it) }) {
                 Hint(
                     "PhotoO 只读写本机相册，不联网、不上传任何照片或位置信息。\n" +
                         "回收站是应用内的软删除；只有在回收站里再次删除，才会真正调用系统删除。"
@@ -361,10 +376,12 @@ fun SettingsScreen(
 private fun SettingsGroup(
     title: String,
     icon: ImageVector,
-    initiallyExpanded: Boolean = true,
+    key: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     content: @Composable () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    var isExpanded by remember(expanded) { mutableStateOf(expanded) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -378,7 +395,7 @@ private fun SettingsGroup(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .clickable { expanded = !expanded }
+                .clickable { isExpanded = !isExpanded; onExpandedChange(!isExpanded) }
                 .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -396,13 +413,13 @@ private fun SettingsGroup(
             )
             Spacer(Modifier.weight(1f))
             Icon(
-                if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                contentDescription = if (expanded) "收起" else "展开",
+                if (isExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = if (isExpanded) "收起" else "展开",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
             )
         }
-        if (expanded) content()
+        if (isExpanded) content()
     }
 }
 
