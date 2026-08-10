@@ -46,7 +46,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.Intent
+import android.net.Uri
 import com.abel.photoo.data.prefs.ThemeMode
 import com.abel.photoo.model.GestureAction
 import com.abel.photoo.model.GestureDirection
@@ -70,6 +73,7 @@ fun SettingsScreen(
     onOpenTrash: () -> Unit,
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val stats by vm.stats.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
     val albums by vm.albums.collectAsStateWithLifecycle()
@@ -148,11 +152,12 @@ fun SettingsScreen(
 
         item("live") {
             SettingsGroup("Live Photo", Icons.Rounded.MotionPhotosOn) {
-                Hint("实况照片自动识别：进入大图即自动播放一次（默认静音，点 LIVE 标可开声），无需任何开关。")
-                ActionRow(
-                    title = "重新扫描实况照片",
-                    subtitle = "清空已识别结果并重新检测内嵌视频（小米/华为等）",
-                    onClick = vm::rescanLivePhotos,
+                Hint("实况照片自动识别：进入大图即自动播放一次，无需任何开关。")
+                SwitchRow(
+                    title = "Live Photo 默认静音",
+                    subtitle = "仅影响下次启动应用；本次会话中可在大图页 LIVE 标旁随时开声",
+                    checked = settings.liveMutedDefault,
+                    onChange = vm::setLiveMutedDefault,
                 )
             }
         }
@@ -293,6 +298,12 @@ fun SettingsScreen(
                 } else {
                     Hint("没有 Key 也能用：地图 Tab 会画出离线示意图，只是不可缩放、不显示真实街道。")
                 }
+                SwitchRow(
+                    title = "云端地址解析",
+                    subtitle = "开：用高德联网反查拍摄点地名（更准）；关：仅用本机 Geocoder，离线且更隐私",
+                    checked = settings.amapCloud,
+                    onChange = vm::setAmapCloud,
+                )
             }
         }
 
@@ -303,9 +314,21 @@ fun SettingsScreen(
                         "回收站是应用内的软删除；只有在回收站里再次删除，才会真正调用系统删除。"
                 )
                 ActionRow(
-                    title = "导出调试日志",
-                    subtitle = "把运行日志复制到「下载」文件夹，方便排查 Live Photo / 地图等问题",
-                    onClick = vm::exportLogs,
+                    title = "分享调试日志",
+                    subtitle = "把运行日志通过系统分享面板发出，方便排查 Live Photo / 地图等问题",
+                    onClick = {
+                        val uri = vm.shareDebugLogUri()
+                        if (uri == null) {
+                            vm.toast("还没有日志文件")
+                            return@ActionRow
+                        }
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "分享调试日志"))
+                    },
                 )
             }
         }

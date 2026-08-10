@@ -42,8 +42,12 @@ data class Settings(
     val gestureSensitivity: GestureSensitivity = GestureSensitivity.NORMAL,
     /** 打开 Live Photo 时自动播放。 */
     val liveAutoPlay: Boolean = true,
+    /** Live Photo 默认是否静音（仅影响下次启动；本次会话由大图页 LIVE 标旁的开关控制）。 */
+    val liveMutedDefault: Boolean = true,
     /** 高德地图 Web 端 key（可选）。留空则地图回退到离线示意图。 */
     val amapKey: String = "",
+    /** 地址解析走云端（高德 REST）还是本机 Geocoder。默认云端。 */
+    val amapCloud: Boolean = true,
 ) {
     fun gesture(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
 
@@ -86,7 +90,9 @@ class AppPrefs(context: Context) {
         },
         gestureSensitivity = sp.getString(KEY_SENSITIVITY, null).toEnum(GestureSensitivity.NORMAL),
         liveAutoPlay = sp.getBoolean(KEY_LIVE_AUTO, true),
+        liveMutedDefault = sp.getBoolean(KEY_LIVE_MUTED_DEFAULT, true),
         amapKey = sp.getString(KEY_AMAP_KEY, "").orEmpty(),
+        amapCloud = sp.getBoolean(KEY_AMAP_CLOUD, true),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -109,7 +115,9 @@ class AppPrefs(context: Context) {
             }
             putString(KEY_SENSITIVITY, next.gestureSensitivity.name)
             putBoolean(KEY_LIVE_AUTO, next.liveAutoPlay)
+            putBoolean(KEY_LIVE_MUTED_DEFAULT, next.liveMutedDefault)
             putString(KEY_AMAP_KEY, next.amapKey)
+            putBoolean(KEY_AMAP_CLOUD, next.amapCloud)
         }
     }
 
@@ -130,7 +138,9 @@ class AppPrefs(context: Context) {
 
     fun setGestureSensitivity(s: GestureSensitivity) = update { copy(gestureSensitivity = s) }
     fun setLiveAutoPlay(on: Boolean) = update { copy(liveAutoPlay = on) }
+    fun setLiveMutedDefault(on: Boolean) = update { copy(liveMutedDefault = on) }
     fun setAmapKey(key: String) = update { copy(amapKey = key.trim()) }
+    fun setAmapCloud(on: Boolean) = update { copy(amapCloud = on) }
 
     fun resetGestures() = update {
         copy(
@@ -157,7 +167,9 @@ class AppPrefs(context: Context) {
         const val KEY_GESTURE_PREFIX = "gesture_"
         const val KEY_SENSITIVITY = "gesture_sensitivity"
         const val KEY_LIVE_AUTO = "live_auto_play"
+        const val KEY_LIVE_MUTED_DEFAULT = "live_muted_default"
         const val KEY_AMAP_KEY = "amap_key"
+        const val KEY_AMAP_CLOUD = "amap_cloud"
         const val QUICK_DELIM = "\u001f"
     }
 }

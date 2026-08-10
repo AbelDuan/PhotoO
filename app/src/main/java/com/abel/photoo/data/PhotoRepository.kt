@@ -617,60 +617,32 @@ class PhotoRepository(
     }
 
     /**
-     * 手动重新扫描实况照片：清空已识别结果，内存里把已标记的实况还原成未识别，
-     * 再跑一遍扫描。设置页"重新扫描实况照片"调用，用于换手机/换图库后重新认实况。
+     * 把日志写入系统「下载」目录（MediaStore，无需权限）并返回其 content Uri，
+     * 供调用方通过系统分享面板发出；没有日志或写入失败返回 null。
      */
-    fun rescanLivePhotos() {
-        scope.launch(Dispatchers.IO) {
-            try {
-                db.clearLivePhotos()
-                _photos.value = _photos.value.map {
-                    if (it.liveType == 2) it.copy(liveType = 0, liveOffset = 0) else it
-                }
-                scanLivePhotos()
-                emit("已开始重新扫描实况照片")
-            } catch (e: Throwable) {
-                Log.w("PhotoO", "rescanLivePhotos failed", e)
-                emit("重新扫描失败：${e.message ?: e::class.simpleName}")
+    fun shareDebugLogUri(): Uri? {
+        val log = PhotoLog.file()
+        if (log == null || !log.exists()) return null
+        return runCatching {
+            val name = "PhotoO-log-${java.text.SimpleDateFormat(
+                "yyyyMMdd-HHmmss", java.util.Locale.US
+            ).format(java.util.Date())}.txt"
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             }
-        }
-    }
-
-    /**
-     * 把日志文件复制到系统「下载」目录（MediaStore，无需权限），
-     * 返回实际写入的文件名；失败返回 null 并提示。
-     */
-    fun exportLogs() {
-        scope.launch(Dispatchers.IO) {
-            val log = PhotoLog.file()
-            if (log == null || !log.exists()) {
-                emit("还没有日志文件")
-                return@launch
+            val uri = context.contentResolver.insert(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+            ) ?: return null
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                log.inputStream().use { it.copyTo(out) }
+            } ?: run {
+                context.contentResolver.delete(uri, null, null)
+                return null
             }
-            val ok = runCatching {
-                val name = "PhotoO-log-${java.text.SimpleDateFormat(
-                    "yyyyMMdd-HHmmss", java.util.Locale.US
-                ).format(java.util.Date())}.txt"
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, name)
-                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val uri = context.contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                )
-                if (uri == null) return@runCatching null
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    log.inputStream().use { it.copyTo(out) }
-                } ?: run {
-                    context.contentResolver.delete(uri, null, null)
-                    return@runCatching null
-                }
-                name
-            }.getOrNull()
-            if (ok != null) emit("日志已导出：下载/$ok")
-            else emit("导出失败：无法写入下载目录，请检查存储空间")
-        }
+            uri
+        }.getOrNull()
     }
 
     // ------------------------------------------------------------ 拍摄坐标
@@ -748,9 +720,11 @@ class PhotoRepository(
      */
     suspend fun reverseGeocode(lat: Double, lon: Double): String? {
         if (!CoordTransform.isValid(lat, lon)) return null
-        val key = prefs.current.amapKey
-        if (key.isNotBlank()) {
-            val fromAmap = amapRegeo(lat, lon, key)
+        val s = prefs.current
+        // 开启云端且填了 key：走高德 REST 逆地理（更准）；
+        // 否则一律用本机 Geocoder（离线 / 隐私）。开关在设置「云端地址解析」里控制。
+        if (s.amapKey.isNotBlank() && s.amapCloud) {
+            val fromAmap = amapRegeo(lat, lon, s.amapKey)
             if (fromAmap != null) {
                 PhotoLog.i("Geo", "regeo-amap-ok: $lat,$lon -> $fromAmap")
                 return fromAmap
@@ -979,8 +953,13 @@ class PhotoRepository(
     }
 
     /**
-     * 整文件扫描定位内嵌视频起始字节：读尾部约 8MB，从后往前找第一个 'ftyp' 盒
-     * （实况视频通常追加在 JPEG 之后、文件末尾），盒起点 = ftyp 位置 - 4。
+     * 整文件扫描定位内嵌视频起始字节。
+     *
+     * 实况视频通常追加在 JPEG 之后、文件末尾，盒起点 = ftyp 位置 - 4。
+     * 早期只扫尾部 8MB，对小米"录像时同步拍"这类大文件（视频常落在离尾部 8MB 之外）
+     * 会漏掉 ftyp 导致整段无法播放。这里改为**扫描整个文件**，取最后一个有效的
+     * 'ftyp' 盒作为视频起点（文件里唯一的 ftyp 就是实况视频容器）。
+     *
      * 找不到返回 -1。
      */
     private fun findEmbeddedVideoStart(
@@ -989,38 +968,50 @@ class PhotoRepository(
         fileLen: Long,
     ): Long {
         if (fileLen <= 16) return -1
-        val tailLen = minOf(fileLen, 8L * 1024 * 1024).toInt()
-        val buf = ByteArray(tailLen)
-        var read = 0
+        val chunk = 4 * 1024 * 1024
+        val overlap = 32 // 足够容纳 8 字节盒头，避免 ftyp 被分块边界截断时漏检
+        val buf = ByteArray(chunk + overlap)
+        var lastFound = -1L
+        var base = 0L // buf[0] 对应的文件绝对偏移
+        var prevLen = 0 // 上一块末尾带过来的重叠字节数（下一个 ftyp 起始可能跨块）
         resolver.openInputStream(uri)?.use { input ->
-            // 跳到尾部区域。
-            var remaining = fileLen - tailLen
-            val tmp = ByteArray(8192)
-            while (remaining > 0) {
-                val n = input.read(tmp, 0, minOf(tmp.size, remaining.toInt()))
-                if (n < 0) break
-                remaining -= n
-            }
-            read = input.read(buf)
-        }
-        if (read <= 12) return -1
-        // 从后往前找 ftyp（用 toByte() 避免符号扩展导致的范围问题）。
-        for (i in (read - 4) downTo 0) {
-            if (buf[i] == 'f'.code.toByte() && buf[i + 1] == 't'.code.toByte() &&
-                buf[i + 2] == 'y'.code.toByte() && buf[i + 3] == 'p'.code.toByte()
-            ) {
-                val boxStart = i - 4
-                if (boxStart >= 0) {
-                    val boxSize = ((buf[boxStart].toLong() and 0xFF) shl 24) or
-                        ((buf[boxStart + 1].toLong() and 0xFF) shl 16) or
-                        ((buf[boxStart + 2].toLong() and 0xFF) shl 8) or
-                        (buf[boxStart + 3].toLong() and 0xFF)
-                    if (boxSize >= 8L) return (fileLen - tailLen) + boxStart
+            while (true) {
+                val space = buf.size - prevLen
+                val n = input.read(buf, prevLen, space)
+                if (n <= 0) break
+                val total = prevLen + n
+                for (i in 0 until total - 4) {
+                    if (buf[i] == 'f'.code.toByte() && buf[i + 1] == 't'.code.toByte() &&
+                        buf[i + 2] == 'y'.code.toByte() && buf[i + 3] == 'p'.code.toByte()
+                    ) {
+                        val boxStart = i - 4
+                        if (boxStart >= 0) {
+                            val boxSize = readU32(buf, boxStart)
+                            val abs = base + boxStart
+                            // 盒要落在文件内；末尾不足一个完整盒的尾巴也接受
+                            // （实况视频常紧贴文件尾，盒大小字段可能因填充略有偏差）。
+                            if (boxSize >= 8L &&
+                                (abs + boxSize <= fileLen || fileLen - abs < 2L * 1024 * 1024)
+                            ) {
+                                lastFound = abs
+                            }
+                        }
+                    }
                 }
+                prevLen = minOf(overlap, total)
+                // 把本块末尾 prevLen 字节搬到 buf 开头，作为下一块的重叠区。
+                System.arraycopy(buf, total - prevLen, buf, 0, prevLen)
+                base += total - prevLen
             }
         }
-        return -1
+        return lastFound
     }
+
+    private fun readU32(b: ByteArray, i: Int): Long =
+        ((b[i].toLong() and 0xFF) shl 24) or
+            ((b[i + 1].toLong() and 0xFF) shl 16) or
+            ((b[i + 2].toLong() and 0xFF) shl 8) or
+            (b[i + 3].toLong() and 0xFF)
 
     private fun resolver() = context.contentResolver
 

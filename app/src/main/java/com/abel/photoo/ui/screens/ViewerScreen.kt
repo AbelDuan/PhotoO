@@ -145,6 +145,10 @@ fun ViewerScreen(
     var zoomed by remember { mutableStateOf(false) }
     var livePlaying by remember { mutableStateOf(false) }
     var liveUri by remember { mutableStateOf<Uri?>(null) }
+    // 记录最近一次翻页方向：删除后据此决定停在"下一张"还是"上一张"。
+    var lastNavDir by remember { mutableStateOf<GestureDirection?>(null) }
+    // 删除后想要落到的页码，等列表收缩（recomposition）后再跳转，避免越界黑屏。
+    var pendingDeleteTarget by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
@@ -154,6 +158,18 @@ fun ViewerScreen(
     LaunchedEffect(photos.size) {
         if (photos.isNotEmpty() && pagerState.currentPage > photos.lastIndex) {
             scope.launch { pagerState.scrollToPage(photos.lastIndex) }
+        }
+    }
+
+    // 删完照片后，按最近翻页方向落到目标页：往回看则停在上一张，否则停在下一张。
+    LaunchedEffect(photos.size) {
+        pendingDeleteTarget?.let { target ->
+            pendingDeleteTarget = null
+            if (photos.isEmpty()) return@LaunchedEffect
+            val t = target.coerceIn(0, photos.lastIndex)
+            if (pagerState.currentPage != t) {
+                scope.launch { pagerState.scrollToPage(t) }
+            }
         }
     }
 
@@ -172,17 +188,35 @@ fun ViewerScreen(
         }
     }
 
+    // 删除当前照片：先按最近翻页方向算出删除后要停留的页码，再真正删除
+    // （列表收缩后由 LaunchedEffect 跳过去，避免停在越界空白页）。
+    fun trash(photo: PhotoItem) {
+        val k = pagerState.currentPage
+        pendingDeleteTarget = if (lastNavDir == GestureDirection.RIGHT) {
+            maxOf(0, k - 1) // 刚才在往回看，删完停在上一张
+        } else {
+            k // 默认停在"下一张"（删除后后面的项前移，当前页码正好落在新下一张）
+        }
+        onTrash(photo)
+    }
+
     fun runAction(action: GestureAction, photo: PhotoItem) {
         when (action) {
             GestureAction.NONE -> Unit
             GestureAction.CLOSE -> onClose()
-            GestureAction.TRASH -> onTrash(photo)
+            GestureAction.TRASH -> trash(photo)
             GestureAction.FAVORITE -> onToggleFavorite(photo)
             GestureAction.MOVE_ALBUM -> onMoveToAlbum(photo)
             GestureAction.INFO -> infoVisible = true
             GestureAction.KEEP -> onMarkKept(photo)
-            GestureAction.NEXT -> goPage(1)
-            GestureAction.PREV -> goPage(-1)
+            GestureAction.NEXT -> {
+                lastNavDir = GestureDirection.LEFT // 左滑 = 下一张
+                goPage(1)
+            }
+            GestureAction.PREV -> {
+                lastNavDir = GestureDirection.RIGHT // 右滑 = 上一张
+                goPage(-1)
+            }
         }
     }
 
@@ -326,7 +360,7 @@ fun ViewerScreen(
                     photo = current,
                     onFavorite = { current?.let(onToggleFavorite) },
                     onMove = { current?.let(onMoveToAlbum) },
-                    onDelete = { current?.let(onTrash) },
+                    onDelete = { current?.let(::trash) },
                     onInfo = { infoVisible = true },
                     onPlayLive = if (current?.isLivePhoto == true) ::toggleLive else null,
                     livePlaying = livePlaying,
@@ -492,11 +526,16 @@ private fun LiveGlyph(active: Boolean) {
 @Composable
 private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    // 首帧渲染前视频层保持透明，避免切到 Live 照片时闪一下黑屏：
+    // 静帧（ZoomableImage 的图）一直显示在下面，首帧就绪后再淡入覆盖。
+    var ready by remember { mutableStateOf(false) }
     AndroidView(
         factory = { ctx ->
             VideoView(ctx).apply {
                 isClickable = false
                 isFocusable = false
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                alpha = 0f
                 setVideoURI(uri)
                 setOnPreparedListener { mp: MediaPlayer ->
                     player = mp
@@ -506,6 +545,14 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
                     val v = if (muted) 0f else 1f
                     runCatching { mp.setVolume(v, v) }
                     start()
+                }
+                // 首帧真正画到 Surface 上时再淡入，消除黑屏闪烁。
+                setOnInfoListener { _, what, _ ->
+                    if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                        animate().alpha(1f).setDuration(150).start()
+                        ready = true
+                    }
+                    true
                 }
                 // 播放完成：通知外层把 livePlaying 复位（回调在主线程，可直接改状态）。
                 setOnCompletionListener { onFinished() }

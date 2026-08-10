@@ -53,10 +53,10 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Live Photo 是否静音。
      *
-     * 刻意不落盘：需求是"每次打开应用第一次播放都默认静音"，
-     * 所以它的生命周期就应该跟着进程走 —— ViewModel 活多久它活多久。
+     * 初始值取自设置里的「Live Photo 默认静音」（仅影响下次启动）；
+     * 本次会话中由大图页 LIVE 标旁的开关实时控制，不回写该设置。
      */
-    private val _liveMuted = MutableStateFlow(true)
+    private val _liveMuted = MutableStateFlow(prefs.current.liveMutedDefault)
     val liveMuted: StateFlow<Boolean> = _liveMuted.asStateFlow()
 
     fun setLiveMuted(muted: Boolean) {
@@ -237,13 +237,12 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------- Live Photo / 地图
 
     fun setLiveAutoPlay(on: Boolean) = prefs.setLiveAutoPlay(on)
+    fun setLiveMutedDefault(on: Boolean) = prefs.setLiveMutedDefault(on)
     fun setAmapKey(key: String) = prefs.setAmapKey(key)
+    fun setAmapCloud(on: Boolean) = prefs.setAmapCloud(on)
 
-    /** 手动重新扫描实况照片（清空识别结果后重扫），设置页"重新扫描实况照片"调用。 */
-    fun rescanLivePhotos() = repo.rescanLivePhotos()
-
-    /** 把调试日志复制到系统「下载」目录，供用户导出。 */
-    fun exportLogs() = repo.exportLogs()
+    /** 把调试日志写入「下载」目录并返回其 content Uri，供设置页通过系统分享面板发出。 */
+    fun shareDebugLogUri(): Uri? = repo.shareDebugLogUri()
 
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)
