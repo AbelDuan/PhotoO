@@ -2,7 +2,10 @@ package com.abel.photoo.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,20 +23,29 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,6 +69,7 @@ import com.abel.photoo.model.SimilarityLevel
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.timelineSections
 import com.abel.photoo.ui.util.Format
 
 /**
@@ -69,6 +83,8 @@ fun SimilarScreen(
     vm: PhotoOViewModel,
     contentPadding: PaddingValues,
     onOpenPhoto: (PhotoItem) -> Unit,
+    onOpenGroup: (String) -> Unit,
+    onMovePicks: (List<Long>) -> Unit,
 ) {
     val groups by vm.similarGroups.collectAsStateWithLifecycle()
     val picks by vm.similarPicks.collectAsStateWithLifecycle()
@@ -158,47 +174,29 @@ fun SimilarScreen(
                     picks = picks,
                     onTogglePick = vm::toggleSimilarPick,
                     onOpenPhoto = onOpenPhoto,
-                    onKeepOnly = { keepId ->
-                        vm.setSimilarPicks(
-                            picks + group.items.filter { it.id != keepId }.map { it.id }
-                        )
-                    },
+                    onOpenGroup = onOpenGroup,
                     onIgnore = { vm.resolveGroup(group.key) },
                 )
             }
         }
 
         if (picks.isNotEmpty()) {
-            Row(
-                Modifier
+            SimilarBatchBar(
+                count = picks.size,
+                onSelectAll = {
+                    vm.setSimilarPicks(visibleGroups.flatMap { it.items }.map { it.id })
+                },
+                onMove = { onMovePicks(picks.toList()) },
+                onTrash = { confirmDelete = true },
+                onClear = vm::clearSimilarPicks,
+                modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
                     .padding(
                         start = 14.dp,
                         end = 14.dp,
                         bottom = contentPadding.calculateBottomPadding() + 14.dp,
-                    )
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "已勾选 ${picks.size} 张",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        "可释放约 ${Format.bytes(pickedBytes)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Button(onClick = { confirmDelete = true }) {
-                    Icon(Icons.Rounded.Delete, null, Modifier.size(18.dp))
-                    Text("移入回收站", Modifier.padding(start = 6.dp))
-                }
-            }
+                    ),
+            )
         }
     }
 
@@ -329,7 +327,7 @@ private fun SimilarGroupCard(
     picks: Set<Long>,
     onTogglePick: (Long) -> Unit,
     onOpenPhoto: (PhotoItem) -> Unit,
-    onKeepOnly: (Long) -> Unit,
+    onOpenGroup: (String) -> Unit,
     onIgnore: () -> Unit,
 ) {
     Column(
@@ -341,7 +339,13 @@ private fun SimilarGroupCard(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onOpenGroup(group.key) }
+                    .padding(vertical = 2.dp)
+            ) {
                 Text(
                     "${group.size} 张相似 · ${Format.relativeSpan(group.timeSpanMillis)}拍摄",
                     style = MaterialTheme.typography.titleSmall,
@@ -352,6 +356,12 @@ private fun SimilarGroupCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Icon(
+                Icons.Rounded.ChevronRight,
+                contentDescription = "进入该组",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
             if (group.resolved) {
                 Text(
                     "已处理",
@@ -372,9 +382,8 @@ private fun SimilarGroupCard(
                     photo = photo,
                     picked = photo.id in picks,
                     suggested = photo.id == group.suggestedKeepId,
-                    onTap = { onTogglePick(photo.id) },
                     onOpen = { onOpenPhoto(photo) },
-                    onKeepOnly = { onKeepOnly(photo.id) },
+                    onTogglePick = { onTogglePick(photo.id) },
                 )
             }
         }
@@ -386,9 +395,8 @@ private fun SimilarTile(
     photo: PhotoItem,
     picked: Boolean,
     suggested: Boolean,
-    onTap: () -> Unit,
     onOpen: () -> Unit,
-    onKeepOnly: () -> Unit,
+    onTogglePick: () -> Unit,
 ) {
     Column(
         Modifier.width(112.dp),
@@ -399,7 +407,10 @@ private fun SimilarTile(
                 .size(112.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .clickable(onClick = onTap),
+                .combinedClickable(
+                    onClick = onOpen,
+                    onLongClick = onTogglePick,
+                ),
         ) {
             AsyncImage(
                 model = photo.uri,
@@ -471,27 +482,170 @@ private fun SimilarTile(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                "查看",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpen)
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
+    }
+}
+
+/** 相似照片的多选操作条，列表页和组内详情页共用。 */
+@Composable
+private fun SimilarBatchBar(
+    count: Int,
+    onSelectAll: () -> Unit,
+    onMove: () -> Unit,
+    onTrash: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$count",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Box(Modifier.weight(1f))
+        BatchAct(Icons.Rounded.SelectAll, "全选", onSelectAll)
+        BatchAct(Icons.Rounded.FolderOpen, "归档", onMove)
+        BatchAct(Icons.Rounded.Delete, "删除", onTrash, MaterialTheme.colorScheme.error)
+        BatchAct(Icons.Rounded.Close, "取消", onClear)
+    }
+}
+
+@Composable
+private fun BatchAct(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .width(58.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+/**
+ * 单个相似组的详情页：点标题进入后，这里把整组照片铺成网格。
+ * 交互与时间线一致——单点看大图，长按进入多选，再点切换选中。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SimilarGroupDetailScreen(
+    vm: PhotoOViewModel,
+    group: SimilarGroup,
+    onBack: () -> Unit,
+    onOpenPhoto: (PhotoItem) -> Unit,
+    onIgnore: () -> Unit,
+    onMovePicks: (List<Long>) -> Unit,
+) {
+    val picks by vm.similarPicks.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    val ids = remember(group) { group.items.map { it.id } }
+    val sections = remember(group, settings.grouping) {
+        Format.buildSections(group.items, settings.grouping)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("${group.size} 张相似", maxLines = 1)
+                        Text(
+                            "差异度 ${group.maxDistance} · 清理后可省 ${Format.bytes(group.reclaimableBytes)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回")
+                    }
+                },
+                actions = {
+                    if (group.resolved) {
+                        Text(
+                            "已处理",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        TextButton(onClick = onIgnore) { Text("忽略此组") }
+                    }
+                },
             )
-            Text(
-                "只留它",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onKeepOnly)
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-            )
+        },
+    ) { inner ->
+        Box(Modifier.fillMaxSize()) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(settings.gridColumns),
+                contentPadding = PaddingValues(
+                    start = 10.dp,
+                    end = 10.dp,
+                    top = inner.calculateTopPadding(),
+                    bottom = inner.calculateBottomPadding() + if (picks.isEmpty()) 24.dp else 96.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                timelineSections(
+                    sections = sections,
+                    selection = picks,
+                    selectionMode = picks.isNotEmpty(),
+                    onPhotoClick = { photo ->
+                        if (picks.isNotEmpty()) vm.toggleSimilarPick(photo.id) else onOpenPhoto(photo)
+                    },
+                    onPhotoLongClick = { vm.toggleSimilarPick(it.id) },
+                    onToggleSection = { section ->
+                        val sids = section.photos.map { it.id }
+                        if (sids.all { it in picks }) vm.setSimilarPicks(picks - sids.toSet())
+                        else vm.setSimilarPicks(picks + sids.toSet())
+                    },
+                )
+            }
+
+            if (picks.isNotEmpty()) {
+                SimilarBatchBar(
+                    count = picks.size,
+                    onSelectAll = { vm.setSimilarPicks(ids) },
+                    onMove = { onMovePicks(picks.toList()) },
+                    onTrash = { confirmDelete = true },
+                    onClear = vm::clearSimilarPicks,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(start = 14.dp, end = 14.dp, bottom = 16.dp),
+                )
+            }
         }
+    }
+
+    if (confirmDelete) {
+        ConfirmDialog(
+            title = "移入回收站",
+            message = "${picks.size} 张照片将移入 PhotoO 回收站，可释放约 " +
+                "${Format.bytes(group.reclaimableBytes)}。" +
+                "回收站里还能恢复，确认彻底删除时才会同步给系统。",
+            confirmText = "移入回收站",
+            danger = true,
+            onConfirm = vm::trashSimilarPicks,
+            onDismiss = { confirmDelete = false },
+        )
     }
 }

@@ -21,20 +21,16 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MotionPhotosOn
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -270,41 +266,6 @@ fun SettingsScreen(
                     subtitle = "把 EXIF 里的经纬度反查成地名，全部在本机离线完成",
                     checked = settings.showLocation,
                     onChange = vm::setShowLocation,
-                )
-            }
-        }
-
-        item("map") {
-            SettingsGroup("地图底图", Icons.Rounded.Map) {
-                Hint(
-                    "地图页默认用「地点卡片」展示，完全离线、不需要任何配置。\n" +
-                        "如果想看真实底图，请自行到腾讯位置服务开放平台 lbs.qq.com 申请一个 " +
-                        "JavaScript API GL 的 key 填在下面（应用不内置任何 key，" +
-                        "填写后底图请求由腾讯地图直接完成）。"
-                )
-                var draft by remember(settings.tencentMapKey) {
-                    mutableStateOf(settings.tencentMapKey)
-                }
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    label = { Text("腾讯地图 key") },
-                    placeholder = { Text("形如 XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { vm.setTencentMapKey(draft) }) { Text("保存") }
-                    if (settings.tencentMapKey.isNotBlank()) {
-                        TextButton(onClick = {
-                            draft = ""
-                            vm.setTencentMapKey("")
-                        }) { Text("清除") }
-                    }
-                }
-                Hint(
-                    if (settings.tencentMapKey.isBlank()) "当前：未配置，地图页使用离线地点卡片。"
-                    else "当前：已配置，地图页可切换到腾讯地图底图。"
                 )
             }
         }

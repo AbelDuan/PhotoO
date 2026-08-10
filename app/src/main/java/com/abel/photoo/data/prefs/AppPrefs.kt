@@ -42,11 +42,6 @@ data class Settings(
     val gestureSensitivity: GestureSensitivity = GestureSensitivity.NORMAL,
     /** 打开 Live Photo 时自动播放。 */
     val liveAutoPlay: Boolean = true,
-    /**
-     * 腾讯位置服务 JavaScript API GL 的 key，用于地图页真实底图。
-     * 应用不内置任何 key，需要用户自行到腾讯位置服务开放平台申请后填入。
-     */
-    val tencentMapKey: String = "",
 ) {
     fun gesture(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
 
@@ -89,7 +84,6 @@ class AppPrefs(context: Context) {
         },
         gestureSensitivity = sp.getString(KEY_SENSITIVITY, null).toEnum(GestureSensitivity.NORMAL),
         liveAutoPlay = sp.getBoolean(KEY_LIVE_AUTO, true),
-        tencentMapKey = sp.getString(KEY_MAP_KEY, "").orEmpty(),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -112,7 +106,6 @@ class AppPrefs(context: Context) {
             }
             putString(KEY_SENSITIVITY, next.gestureSensitivity.name)
             putBoolean(KEY_LIVE_AUTO, next.liveAutoPlay)
-            putString(KEY_MAP_KEY, next.tencentMapKey)
         }
     }
 
@@ -133,7 +126,6 @@ class AppPrefs(context: Context) {
 
     fun setGestureSensitivity(s: GestureSensitivity) = update { copy(gestureSensitivity = s) }
     fun setLiveAutoPlay(on: Boolean) = update { copy(liveAutoPlay = on) }
-    fun setTencentMapKey(key: String) = update { copy(tencentMapKey = key.trim()) }
 
     fun resetGestures() = update {
         copy(
@@ -160,7 +152,6 @@ class AppPrefs(context: Context) {
         const val KEY_GESTURE_PREFIX = "gesture_"
         const val KEY_SENSITIVITY = "gesture_sensitivity"
         const val KEY_LIVE_AUTO = "live_auto_play"
-        const val KEY_MAP_KEY = "tencent_map_key"
         const val QUICK_DELIM = "\u001f"
     }
 }

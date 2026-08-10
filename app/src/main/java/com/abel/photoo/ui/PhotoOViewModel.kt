@@ -237,7 +237,6 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------- Live Photo / 地图
 
     fun setLiveAutoPlay(on: Boolean) = prefs.setLiveAutoPlay(on)
-    fun setTencentMapKey(key: String) = prefs.setTencentMapKey(key)
 
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)

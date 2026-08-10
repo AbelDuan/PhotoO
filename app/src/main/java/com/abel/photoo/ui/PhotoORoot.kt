@@ -86,6 +86,7 @@ import com.abel.photoo.ui.screens.AlbumsScreen
 import com.abel.photoo.ui.screens.MapScreen
 import com.abel.photoo.ui.screens.ReviewScreen
 import com.abel.photoo.ui.screens.SettingsScreen
+import com.abel.photoo.ui.screens.SimilarGroupDetailScreen
 import com.abel.photoo.ui.screens.SimilarScreen
 import com.abel.photoo.ui.screens.TimelineScreen
 import com.abel.photoo.ui.screens.TrashScreen
@@ -149,12 +150,14 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     val stats by vm.stats.collectAsStateWithLifecycle()
     val exif by vm.exifCache.collectAsStateWithLifecycle()
     val liveMuted by vm.liveMuted.collectAsStateWithLifecycle()
+    val similarGroups by vm.similarGroups.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TIMELINE) }
     var albumDetail by remember { mutableStateOf<AlbumItem?>(null) }
     var reviewing by rememberSaveable { mutableStateOf(false) }
     var trashOpen by rememberSaveable { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
+    var similarDrillKey by remember { mutableStateOf<String?>(null) }
 
     var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
@@ -286,6 +289,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     onOpenPhoto = { photo ->
                         viewer = ViewerRequest(photos.map { it.id }, photo.id)
                     },
+                    onOpenGroup = { similarDrillKey = it },
+                    onMovePicks = { pickerTargets = it },
                 )
 
                 Tab.SETTINGS -> SettingsScreen(
@@ -315,6 +320,27 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     viewer = ViewerRequest(ids, photo.id)
                 },
             )
+        }
+
+        // ----------------------------------------------------- 相似组详情覆盖层
+        similarDrillKey?.let { key ->
+            val group = similarGroups.firstOrNull { it.key == key }
+            if (group == null) {
+                LaunchedEffect(Unit) { similarDrillKey = null }
+            } else {
+                val closeDetail = { similarDrillKey = null }
+                BackHandler(onBack = closeDetail)
+                SimilarGroupDetailScreen(
+                    vm = vm,
+                    group = group,
+                    onBack = closeDetail,
+                    onOpenPhoto = { photo ->
+                        viewer = ViewerRequest(group.items.map { it.id }, photo.id)
+                    },
+                    onIgnore = { vm.resolveGroup(key) },
+                    onMovePicks = { pickerTargets = it },
+                )
+            }
         }
 
         // --------------------------------------------------------- 多选操作条
@@ -429,6 +455,7 @@ private fun AlbumPickerHost(
         photoCount = targets.size,
         onPick = { album ->
             vm.moveToAlbum(targets, album)
+            vm.clearSimilarPicks()
             onDismiss()
         },
         onCreateNew = onCreateNew,
