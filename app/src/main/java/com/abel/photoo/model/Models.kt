@@ -19,6 +19,8 @@ data class PhotoItem(
     val height: Int,
     val mimeType: String,
     val orientation: Int,
+    /** 是否为视频（普通 mp4/mov 等，区别于图片与 Live Photo）。 */
+    val isVideo: Boolean = false,
     /** 是否已被用户筛选/归类处理过 */
     val reviewed: Boolean = false,
     val reviewAction: ReviewAction = ReviewAction.NONE,
@@ -186,6 +188,7 @@ enum class GestureAction(val label: String) {
     KEEP("标记已看"),
     NEXT("下一张"),
     PREV("上一张"),
+    UNDO("撤销上一步"),
 }
 
 /** 四个方向。用枚举而不是四个字段，设置页可以直接遍历渲染。 */

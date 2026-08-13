@@ -1,18 +1,28 @@
 package com.abel.photoo.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -20,13 +30,22 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.abel.photoo.model.AlbumItem
 import com.abel.photoo.ui.PhotoOViewModel
@@ -49,17 +68,30 @@ fun AlbumsScreen(
     var actionTarget by remember { mutableStateOf<AlbumItem?>(null) }
     var sortMode by remember { mutableStateOf(false) }
 
-    /** 上移/下移：在当前的显示顺序里交换两个相册并整体落盘。 */
-    fun reorder(from: Int, to: Int) {
-        if (from == to || to < 0 || to >= albums.size) return
-        val list = albums.toMutableList()
-        val item = list.removeAt(from)
-        list.add(to, item)
-        vm.setAlbumOrder(list.map { it.relativePath })
+    // 排序模式下展示的相册顺序（名字 + 拖动手柄调整）。外部顺序变化时同步回 albums。
+    var ordered by remember(albums) { mutableStateOf(albums) }
+    LaunchedEffect(albums) { ordered = albums }
+    var draggingIndex by remember { mutableStateOf(-1) }
+    var dragDelta by remember { mutableStateOf(0f) }
+    val density = LocalDensity.current
+    val itemH = with(density) { 60.dp.toPx() }
+
+    fun swap(from: Int, to: Int) {
+        if (from == to || to !in ordered.indices) return
+        val l = ordered.toMutableList()
+        val it = l.removeAt(from)
+        l.add(to, it)
+        ordered = l
+    }
+
+    fun commitReorder() {
+        vm.setAlbumOrder(ordered.map { it.relativePath })
+        draggingIndex = -1
+        dragDelta = 0f
     }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = if (sortMode) GridCells.Fixed(1) else GridCells.Fixed(2),
         contentPadding = PaddingValues(
             start = 14.dp,
             end = 14.dp,
@@ -76,23 +108,30 @@ fun AlbumsScreen(
                     .fillMaxWidth()
                     .padding(top = 6.dp, bottom = 2.dp),
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
                     "相册",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
                 )
-                Button(
-                    onClick = { sortMode = !sortMode },
-                    modifier = Modifier.padding(end = 8.dp),
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Rounded.SwapVert, null, modifier = Modifier.padding(end = 6.dp))
-                    Text(if (sortMode) "完成" else "排序")
-                }
-                Button(onClick = { creating = true }) {
-                    Icon(Icons.Rounded.Add, null, modifier = Modifier.padding(end = 6.dp))
-                    Text("新建")
+                    Button(
+                        onClick = {
+                            if (sortMode) commitReorder()
+                            sortMode = !sortMode
+                        },
+                    ) {
+                        Icon(Icons.Rounded.SwapVert, null, modifier = Modifier.padding(end = 6.dp))
+                        Text(if (sortMode) "完成" else "排序")
+                    }
+                    Button(onClick = { creating = true }) {
+                        Icon(Icons.Rounded.Add, null, modifier = Modifier.padding(end = 6.dp))
+                        Text("新建")
+                    }
                 }
             }
         }
@@ -103,31 +142,76 @@ fun AlbumsScreen(
             }
         }
 
-        items(albums.size, key = { albums[it].bucketId }) { i ->
-            val album = albums[i]
-            AlbumCard(
-                name = album.name,
-                count = album.count,
-                coverUri = album.coverUri,
-                pending = album.pendingLocal,
-                latestDate = album.latestDate,
-                onClick = { onOpenAlbum(album) },
-                onLongClick = { actionTarget = album },
-                trailing = if (sortMode) {
-                    {
-                        Row {
-                            IconButton(
-                                enabled = i > 0,
-                                onClick = { reorder(i, i - 1) },
-                            ) { Icon(Icons.Rounded.ArrowUpward, "上移") }
-                            IconButton(
-                                enabled = i < albums.lastIndex,
-                                onClick = { reorder(i, i + 1) },
-                            ) { Icon(Icons.Rounded.ArrowDownward, "下移") }
-                        }
+        val list = if (sortMode) ordered else albums
+        items(list.size, key = { list[it].bucketId }) { i ->
+            val album = list[i]
+            if (sortMode) {
+                // 排序模式：按名字一行一个，左侧拖动手柄长按拖动调整顺序。
+                val isDrag = i == draggingIndex
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest
+                            else MaterialTheme.colorScheme.surfaceContainerHigh
+                        )
+                        .then(if (isDrag) Modifier.offset { IntOffset(0, dragDelta.toInt()) } else Modifier)
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Rounded.DragHandle,
+                            contentDescription = "拖动排序",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .pointerInput(Unit) {
+                                    detectDragGestures(
+                                        onDragStart = { draggingIndex = i; dragDelta = 0f },
+                                        onDrag = { change: PointerInputChange, dragAmount: Offset ->
+                                            dragDelta += dragAmount.y
+                                            val shift = (dragDelta / itemH).roundToInt()
+                                            val t = (draggingIndex + shift).coerceIn(0, ordered.lastIndex)
+                                            if (t != draggingIndex) {
+                                                swap(draggingIndex, t)
+                                                draggingIndex = t
+                                                dragDelta -= shift * itemH
+                                            }
+                                        },
+                                        onDragEnd = { commitReorder() },
+                                        onDragCancel = { draggingIndex = -1; dragDelta = 0f },
+                                    )
+                                },
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            album.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                        )
                     }
-                } else null,
-            )
+                    Text(
+                        "${album.count} 张",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            } else {
+                AlbumCard(
+                    name = album.name,
+                    count = album.count,
+                    coverUri = album.coverUri,
+                    pending = album.pendingLocal,
+                    latestDate = album.latestDate,
+                    onClick = { onOpenAlbum(album) },
+                    onLongClick = { actionTarget = album },
+                    trailing = null,
+                )
+            }
         }
     }
 

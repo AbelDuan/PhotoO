@@ -64,6 +64,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -170,7 +171,6 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var confirmTrashSelection by remember { mutableStateOf(false) }
-    var quickCreate by remember { mutableStateOf<PhotoItem?>(null) }
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -190,6 +190,16 @@ fun PhotoORoot(vm: PhotoOViewModel) {
             snackbar.currentSnackbarData?.dismiss()
             snackbar.showSnackbar("已移入回收站 ${ev.count} 张")
         }
+    }
+
+    // 撤销并跳回被删（已恢复）的那张照片：恢复后照片同步回到内存图库，
+    // 用新的 ViewerRequest 重启大图页，停留在刚恢复的照片上。
+    fun handleUndo() {
+        val ev = vm.undoEvent.value ?: return
+        val target = ev.ids.firstOrNull() ?: return
+        vm.undoLastTrash()
+        val ids = vm.photos.value.map { it.id }
+        viewer = ViewerRequest(ids, target)
     }
 
     // "启动时继续整理"：等第一批数据到位再判断，否则开屏时 stats 还是 0。
@@ -429,35 +439,30 @@ fun PhotoORoot(vm: PhotoOViewModel) {
             if (list.isEmpty()) {
                 LaunchedEffect(Unit) { viewer = null }
             } else {
-                BackHandler { viewer = null }
-                ViewerScreen(
-                    photos = list,
-                    initialId = request.initialId,
-                    exif = exif,
-                    onRequestExif = vm::loadExif,
-                    onClose = { viewer = null },
-                    onTrash = { vm.moveToTrash(listOf(it.id)) },
-                    onToggleFavorite = { vm.toggleFavorite(it.id) },
-                    onMoveToAlbum = { pickerTargets = listOf(it.id) },
-                    quickAlbums = settings.quickAlbums,
-                    quickAlbumCovers = remember(albums) {
-                        albums.associate { it.name to it.coverUri }
-                    },
-                    onMoveToQuickAlbum = { photo, name -> vm.moveToAlbumByName(name, listOf(photo.id)) },
-                    onCreateQuickAlbum = { photo -> quickCreate = photo },
-                    onResolveLiveVideo = { vm.resolveLiveVideo(it) },
-                    // 同名相册可能对应多个目录（小米的"截图"就是），按名字去重再给大图页。
-                    allAlbums = remember(albums) { albums.map { it.name }.distinct() },
-                    onSetQuickAlbums = vm::setQuickAlbums,
-                    onMarkKept = { vm.markKept(listOf(it.id)) },
-                    gestures = settings.gestures,
-                    sensitivity = settings.gestureSensitivity.factor,
-                    // 实况识别与自动播放默认开启且不再提供设置开关，这里恒为 true
-                    // （避免老版本把 liveAutoPlay 存成 false 的用户无法自动播放）。
-                    liveAutoPlay = true,
-                    liveMuted = liveMuted,
-                    onSetLiveMuted = vm::setLiveMuted,
-                )
+                // 用 request 做 key：撤销后重建 ViewerRequest 会重启大图页并跳回被恢复的照片。
+                key(request) {
+                    BackHandler { viewer = null }
+                    ViewerScreen(
+                        photos = list,
+                        initialId = request.initialId,
+                        exif = exif,
+                        onRequestExif = vm::loadExif,
+                        onClose = { viewer = null },
+                        onTrash = { vm.moveToTrash(listOf(it.id)) },
+                        onToggleFavorite = { vm.toggleFavorite(it.id) },
+                        onMoveToAlbum = { pickerTargets = listOf(it.id) },
+                        onUndo = { handleUndo() },
+                        onResolveLiveVideo = { vm.resolveLiveVideo(it) },
+                        onMarkKept = { vm.markKept(listOf(it.id)) },
+                        gestures = settings.gestures,
+                        sensitivity = settings.gestureSensitivity.factor,
+                        // 实况识别与自动播放默认开启且不再提供设置开关，这里恒为 true
+                        // （避免老版本把 liveAutoPlay 存成 false 的用户无法自动播放）。
+                        liveAutoPlay = true,
+                        liveMuted = liveMuted,
+                        onSetLiveMuted = vm::setLiveMuted,
+                    )
+                }
             }
         }
 
@@ -476,7 +481,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                 ),
         ) {
             ExtendedFloatingActionButton(
-                onClick = vm::undoLastTrash,
+                onClick = { handleUndo() },
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             ) {
@@ -494,16 +499,6 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     }
 
     NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
-
-    quickCreate?.let { photo ->
-        TextInputDialog(
-            title = "新建并归入",
-            label = "相册名称",
-            confirmText = "创建并归入",
-            onConfirm = { vm.createAlbumAndMove(it, listOf(photo.id)) },
-            onDismiss = { quickCreate = null },
-        )
-    }
 
     if (confirmTrashSelection) {
         ConfirmDialog(

@@ -203,44 +203,6 @@ fun SettingsScreen(
             }
         }
 
-        item("quick") {
-            SettingsGroup("快捷归入", Icons.Rounded.Folder, "quick",
-                grpExpanded("quick"), { vm.setGroupExpanded("quick", it) }) {
-                Hint("选中的相册会出现在大图页底部，点一下即可把当前照片归入，免去每次走相册选择器。")
-                if (albums.isEmpty()) {
-                    Hint("还没有任何相册，先去相册页看看。")
-                } else {
-                    // 同一个相册名可能对应多个 bucket（如小米的"截图"出现在两个目录），
-                    // 这里按名字去重只显示一次，并保留照片数最多的那个作为代表，
-                    // 否则会出现"两个截图"且勾选一个另一个也联动勾选的问题。
-                    val uniqueAlbums = albums
-                        .groupBy { it.name }
-                        .map { (_, list) -> list.maxByOrNull { it.count }!! }
-                    val picked = settings.quickAlbums.toSet()
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        uniqueAlbums.forEach { album ->
-                            FilterChip(
-                                selected = album.name in picked,
-                                onClick = {
-                                    val next = if (album.name in picked) {
-                                        picked - album.name
-                                    } else {
-                                        picked + album.name
-                                    }
-                                    vm.setQuickAlbums(next.toList())
-                                },
-                                label = { Text(album.name) },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         item("delete") {
             SettingsGroup("删除与回收站", Icons.Rounded.Delete, "delete",
                 grpExpanded("delete"), { vm.setGroupExpanded("delete", it) }) {

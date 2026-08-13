@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.NotInterested
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Refresh
@@ -581,6 +582,67 @@ private fun BatchAct(
     }
 }
 
+/** 相似组详情底部常驻栏：上一组 / 下一组 / 忽略此组，并显示当前第几组。 */
+@Composable
+private fun SimilarDetailBar(
+    hasPrev: Boolean,
+    hasNext: Boolean,
+    index: Int,
+    total: Int,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onIgnore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        DetailAct(Icons.Rounded.ChevronLeft, "上一组", onPrev, enabled = hasPrev)
+        Text(
+            "$index / $total",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        DetailAct(Icons.Rounded.ChevronRight, "下一组", onNext, enabled = hasNext)
+        DetailAct(
+            Icons.Rounded.NotInterested,
+            "忽略此组",
+            onIgnore,
+            tint = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+@Composable
+private fun DetailAct(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    val a = if (enabled) 1f else 0.38f
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .width(64.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(30.dp)) {
+            Icon(icon, contentDescription = label, tint = tint.copy(alpha = a), modifier = Modifier.size(21.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint.copy(alpha = a))
+    }
+}
+
 /**
  * 单个相似组的详情页：点标题进入后，这里把整组照片铺成网格。
  * 交互与时间线一致——单点看大图，长按进入多选，再点切换选中。
@@ -647,25 +709,7 @@ fun SimilarGroupDetailScreen(
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回")
                     }
                 },
-                actions = {
-                    IconButton(
-                        onClick = { if (prevKey != null) onNavigateToGroup(prevKey) },
-                        enabled = prevKey != null,
-                    ) { Icon(Icons.Rounded.ChevronLeft, "上一组") }
-                    IconButton(
-                        onClick = { if (nextKey != null) onNavigateToGroup(nextKey) },
-                        enabled = nextKey != null,
-                    ) { Icon(Icons.Rounded.ChevronRight, "下一组") }
-                    if (group.resolved) {
-                        Text(
-                            "已处理",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        TextButton(onClick = onIgnore) { Text("忽略此组") }
-                    }
-                },
+                actions = {},
             )
         },
     ) { inner ->
@@ -691,7 +735,7 @@ fun SimilarGroupDetailScreen(
                     start = 10.dp,
                     end = 10.dp,
                     top = inner.calculateTopPadding(),
-                    bottom = inner.calculateBottomPadding() + if (picks.isEmpty()) 24.dp else 96.dp,
+                    bottom = inner.calculateBottomPadding() + if (picks.isEmpty()) 96.dp else 160.dp,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -723,9 +767,22 @@ fun SimilarGroupDetailScreen(
                     onClear = vm::clearSimilarPicks,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(start = 14.dp, end = 14.dp, bottom = 16.dp),
+                        .padding(start = 14.dp, end = 14.dp, bottom = 92.dp),
                 )
             }
+            // 切换组 / 忽略此组 常驻底部，单手即可操作。
+            SimilarDetailBar(
+                hasPrev = prevKey != null,
+                hasNext = nextKey != null,
+                index = index + 1,
+                total = groups.size,
+                onPrev = { if (prevKey != null) onNavigateToGroup(prevKey) },
+                onNext = { if (nextKey != null) onNavigateToGroup(nextKey) },
+                onIgnore = onIgnore,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 14.dp, end = 14.dp, bottom = 16.dp),
+            )
         }
     }
 

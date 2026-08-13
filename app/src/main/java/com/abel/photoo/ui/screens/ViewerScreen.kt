@@ -1,15 +1,23 @@
 package com.abel.photoo.ui.screens
 
+import android.app.Activity
+import android.content.ContextWrapper
+import android.net.Uri
+import android.view.View
+import android.widget.VideoView
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.activity.compose.BackHandler
-import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,11 +36,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -43,7 +46,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -55,13 +57,14 @@ import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -71,7 +74,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -80,12 +82,15 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import android.media.MediaPlayer
-import android.widget.VideoView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.abel.photoo.model.ExifInfo
 import com.abel.photoo.model.GestureAction
@@ -93,6 +98,8 @@ import com.abel.photoo.model.GestureDirection
 import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.ui.components.ZoomableImage
 import com.abel.photoo.ui.util.Format
+import kotlinx.coroutines.delay
+import kotlin.math.abs
 
 /**
  * 全屏大图查看器。
@@ -102,8 +109,8 @@ import com.abel.photoo.ui.util.Format
  *   下滑   → 退出          单击 → 显隐工具栏
  *   双击 / 双指 → 缩放
  *
- * Live Photo 打开即自动播放（可关），首次播放默认静音，画面左上角有微信同款的
- * LIVE 徽标，点一下可以停 / 播，旁边是声音开关。
+ * Live Photo 打开即自动播放（可关）；视频则内置播放器，单击播放/暂停、上滑删除。
+ * 单击隐藏工具栏时会同步隐藏系统状态栏与导航栏，实现完全全屏看照片。
  */
 @Composable
 fun ViewerScreen(
@@ -115,16 +122,8 @@ fun ViewerScreen(
     onTrash: (PhotoItem) -> Unit,
     onToggleFavorite: (PhotoItem) -> Unit,
     onMoveToAlbum: (PhotoItem) -> Unit,
-    quickAlbums: List<String> = emptyList(),
-    /** 快捷相册名 -> 封面 Uri（null 显示文件夹图标），用于多列网格里的相册卡片。 */
-    quickAlbumCovers: Map<String, Uri?> = emptyMap(),
-    onMoveToQuickAlbum: (PhotoItem, String) -> Unit = { _, _ -> },
-    onCreateQuickAlbum: (PhotoItem) -> Unit = { _ -> },
-    /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取）。 */
     onResolveLiveVideo: suspend (PhotoItem) -> Uri? = { null },
-    /** 图库里全部相册名，供大图页直接勾选常用文件夹。 */
-    allAlbums: List<String> = emptyList(),
-    onSetQuickAlbums: (List<String>) -> Unit = {},
+    onUndo: () -> Unit = {},
     onMarkKept: (PhotoItem) -> Unit = {},
     /** 四个方向各自绑定的动作。 */
     gestures: Map<GestureDirection, GestureAction> = emptyMap(),
@@ -139,6 +138,10 @@ fun ViewerScreen(
         return
     }
 
+    val view = LocalView.current
+    // 退出查看器 / 显隐工具栏时同步隐藏系统状态栏、导航栏，照片才算"完全全屏"。
+    DisposableEffect(Unit) { onDispose { setSystemBarsVisible(view, true) } }
+
     val startIndex = remember(initialId) {
         photos.indexOfFirst { it.id == initialId }.coerceAtLeast(0)
     }
@@ -148,7 +151,6 @@ fun ViewerScreen(
     )
     var chromeVisible by remember { mutableStateOf(true) }
     var infoVisible by remember { mutableStateOf(false) }
-    var quickPickerVisible by remember { mutableStateOf(false) }
     var zoomed by remember { mutableStateOf(false) }
     var livePlaying by remember { mutableStateOf(false) }
     var liveUri by remember { mutableStateOf<Uri?>(null) }
@@ -167,6 +169,9 @@ fun ViewerScreen(
             scope.launch { pagerState.scrollToPage(photos.lastIndex) }
         }
     }
+
+    // 单击隐藏工具栏时同步隐藏系统状态栏/导航栏，再点一下恢复。
+    LaunchedEffect(chromeVisible) { setSystemBarsVisible(view, chromeVisible) }
 
     // 删完照片后，按最近翻页方向落到目标页：往回看则停在上一张，否则停在下一张。
     LaunchedEffect(photos.size) {
@@ -216,6 +221,7 @@ fun ViewerScreen(
             GestureAction.MOVE_ALBUM -> onMoveToAlbum(photo)
             GestureAction.INFO -> infoVisible = true
             GestureAction.KEEP -> onMarkKept(photo)
+            GestureAction.UNDO -> onUndo()
             GestureAction.NEXT -> {
                 lastNavDir = GestureDirection.LEFT // 左滑 = 下一张
                 goPage(1)
@@ -286,39 +292,49 @@ fun ViewerScreen(
         ) { page ->
             val photo = photos[page]
             val isCurrent = page == pagerState.currentPage
-            ZoomableImage(
-                model = photo.uri,
-                contentDescription = photo.displayName,
-                resetKey = photo.id,
-                thumbModel = photo.thumbUri,
-                sensitivity = sensitivity,
-                horizontalEnabled = !horizontalIsPaging,
-                onTap = { chromeVisible = !chromeVisible },
-                onSwipe = { dir ->
-                    // 滑动会翻页或关闭，先把正在播的 Live 停掉，免得声音跟着跑。
-                    livePlaying = false
-                    runAction(actionOf(dir), photo)
-                },
-                flyOut = { dir ->
-                    // 只有"删除 / 退出"这类动作值得整张图飞出去；翻页飞出反而奇怪。
-                    actionOf(dir) == GestureAction.TRASH || actionOf(dir) == GestureAction.CLOSE
-                },
-                // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
-                // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
-                onFlyStart = { livePlaying = false },
-                onZoomChanged = { if (isCurrent) zoomed = it },
-                overlay = if (isCurrent && livePlaying && liveUri != null) {
-                    {
-                        key(liveUri) {
-                            LiveVideoLayer(
-                                uri = liveUri!!,
-                                muted = liveMuted,
-                                onFinished = { livePlaying = false },
-                            )
+            if (photo.isVideo) {
+                // 视频：内置播放器，上滑删除 / 下滑退出 / 单击显隐工具栏。
+                VideoPage(
+                    photo = photo,
+                    sensitivity = sensitivity,
+                    onSwipe = { runAction(actionOf(it), photo) },
+                    onToggleChrome = { chromeVisible = !chromeVisible },
+                )
+            } else {
+                ZoomableImage(
+                    model = photo.uri,
+                    contentDescription = photo.displayName,
+                    resetKey = photo.id,
+                    thumbModel = photo.thumbUri,
+                    sensitivity = sensitivity,
+                    horizontalEnabled = !horizontalIsPaging,
+                    onTap = { chromeVisible = !chromeVisible },
+                    onSwipe = { dir ->
+                        // 滑动会翻页或关闭，先把正在播的 Live 停掉，免得声音跟着跑。
+                        livePlaying = false
+                        runAction(actionOf(dir), photo)
+                    },
+                    flyOut = { dir ->
+                        // 只有"删除 / 退出"这类动作值得整张图飞出去；翻页飞出反而奇怪。
+                        actionOf(dir) == GestureAction.TRASH || actionOf(dir) == GestureAction.CLOSE
+                    },
+                    // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
+                    // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
+                    onFlyStart = { livePlaying = false },
+                    onZoomChanged = { if (isCurrent) zoomed = it },
+                    overlay = if (isCurrent && livePlaying && liveUri != null) {
+                        {
+                            key(liveUri) {
+                                LiveVideoLayer(
+                                    uri = liveUri!!,
+                                    muted = liveMuted,
+                                    onFinished = { livePlaying = false },
+                                )
+                            }
                         }
-                    }
-                } else null,
-            )
+                    } else null,
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -351,32 +367,20 @@ fun ViewerScreen(
         }
 
         AnimatedVisibility(
-            visible = chromeVisible && !infoVisible && !quickPickerVisible,
+            visible = chromeVisible && !infoVisible,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // 快捷归入：常看的那几个文件夹这里点一下就归，不用每次走相册选择器。
-                if (current != null) {
-                    QuickAlbumBar(
-                        albums = quickAlbums,
-                        covers = quickAlbumCovers,
-                        onPick = { onMoveToQuickAlbum(current, it) },
-                        onCreate = { onCreateQuickAlbum(current) },
-                        onConfigure = { quickPickerVisible = true },
-                    )
-                }
-                ViewerBottomBar(
-                    photo = current,
-                    onFavorite = { current?.let(onToggleFavorite) },
-                    onMove = { current?.let(onMoveToAlbum) },
-                    onDelete = { current?.let(::trash) },
-                    onInfo = { infoVisible = true },
-                    onPlayLive = if (current?.isLivePhoto == true) ::toggleLive else null,
-                    livePlaying = livePlaying,
-                )
-            }
+            ViewerBottomBar(
+                photo = current,
+                onFavorite = { current?.let(onToggleFavorite) },
+                onMove = { current?.let(onMoveToAlbum) },
+                onDelete = { current?.let(::trash) },
+                onInfo = { infoVisible = true },
+                onPlayLive = if (current?.isLivePhoto == true) ::toggleLive else null,
+                livePlaying = livePlaying,
+            )
         }
 
         AnimatedVisibility(
@@ -391,24 +395,31 @@ fun ViewerScreen(
                 onClose = { infoVisible = false },
             )
         }
-
-        AnimatedVisibility(
-            visible = quickPickerVisible,
-            enter = slideInVertically { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            QuickAlbumPicker(
-                all = allAlbums,
-                selected = quickAlbums,
-                onApply = {
-                    onSetQuickAlbums(it)
-                    quickPickerVisible = false
-                },
-                onClose = { quickPickerVisible = false },
-            )
-        }
     }
+}
+
+/** 让系统状态栏与导航栏显示 / 隐藏（隐藏后照片完全全屏；轻扫可临时呼出）。 */
+private fun setSystemBarsVisible(view: View, visible: Boolean) {
+    val activity = findActivity(view) ?: return
+    val controller = WindowInsetsControllerCompat(activity.window, view)
+    val bars = WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars()
+    if (visible) {
+        controller.show(bars)
+    } else {
+        controller.hide(bars)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+}
+
+/** 从 View 向上找到所属 Activity（ContextWrapper 链）。 */
+private fun findActivity(view: View): Activity? {
+    var ctx = view.context
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }
 
 @Composable
@@ -536,7 +547,7 @@ private fun LiveGlyph(active: Boolean) {
 /** Live Photo 视频层。放在手势 Box 内部，VideoView 不消费触摸，滑动手势照常可用。 */
 @Composable
 private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var player by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
     // 首帧渲染前视频层保持透明，避免切到 Live 照片时闪一下黑屏：
     // 静帧（ZoomableImage 的图）一直显示在下面，首帧就绪后再淡入覆盖。
     var ready by remember { mutableStateOf(false) }
@@ -548,7 +559,7 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 alpha = 0f
                 setVideoURI(uri)
-                setOnPreparedListener { mp: MediaPlayer ->
+                setOnPreparedListener { mp: android.media.MediaPlayer ->
                     player = mp
                     // 播一遍就停（微信实况也是单次播放）：结束后停在最后一帧，
                     // LIVE 徽标回到未播放态，再点一下从头重播。
@@ -559,7 +570,7 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
                 }
                 // 首帧真正画到 Surface 上时再淡入，消除黑屏闪烁。
                 setOnInfoListener { _, what, _ ->
-                    if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    if (what == android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
                         animate().alpha(1f).setDuration(150).start()
                         ready = true
                     }
@@ -587,6 +598,82 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
         },
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+/**
+ * 视频播放页。单击播放/暂停（暂停时中央显示大播放按钮），
+ * 上滑 / 下滑交给上层手势（删除 / 退出 / 撤销），左右横滑仍由 Pager 翻页。
+ */
+@Composable
+private fun VideoPage(
+    photo: PhotoItem,
+    sensitivity: Float,
+    onSwipe: (GestureDirection) -> Unit,
+    onToggleChrome: () -> Unit,
+) {
+    var playing by remember(photo.id) { mutableStateOf(false) }
+    var viewRef by remember { mutableStateOf<VideoView?>(null) }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    setVideoURI(photo.uri)
+                    setOnPreparedListener { it.isLooping = false }
+                    setOnCompletionListener { playing = false }
+                }.also { viewRef = it }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // 手势层：只在纵向拖拽时消费事件，让左右横滑（翻页）与中央播放按钮照常工作。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var axisV = false
+                        var totalX = 0f
+                        var totalY = 0f
+                        val slop = viewConfiguration.touchSlop
+                        do {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.any { it.pressed }
+                        if (!axisV) {
+                            val pan = event.calculatePan()
+                            totalX += pan.x
+                            totalY += pan.y
+                            if (abs(totalY) > slop) axisV = true
+                        }
+                    } while (event.changes.any { it.pressed })
+                        if (axisV) {
+                            val threshold = size.height * 0.16f / sensitivity.coerceAtLeast(0.2f)
+                            when {
+                                totalY < -threshold -> onSwipe(GestureDirection.UP)
+                                totalY > threshold -> onSwipe(GestureDirection.DOWN)
+                                abs(totalX) < slop && abs(totalY) < slop -> onToggleChrome()
+                                else -> Unit // 横向滑动交给 Pager 翻页，不切换工具栏
+                            }
+                        } else {
+                            // 没怎么动：视为单击，显隐工具栏。
+                            onToggleChrome()
+                        }
+                    }
+                },
+        )
+        if (!playing) {
+            IconButton(
+                onClick = { viewRef?.start(); playing = true },
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Icon(
+                    Icons.Rounded.PlayArrow,
+                    contentDescription = "播放",
+                    tint = Color.White,
+                    modifier = Modifier.size(64.dp),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -628,134 +715,6 @@ private fun ViewerBottomBar(
             )
         }
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
-    }
-}
-
-/**
- * 快捷归入条：多列网格 + 上下滑动，一眼看到更多文件夹，比原来单行横滑高效。
- * 每个相册是带封面缩略图的方形卡片；「选择 / 新建」是两个操作卡。
- */
-@Composable
-private fun QuickAlbumBar(
-    albums: List<String>,
-    covers: Map<String, Uri?>,
-    onPick: (String) -> Unit,
-    onCreate: () -> Unit = {},
-    onConfigure: () -> Unit = {},
-) {
-    val scheme = MaterialTheme.colorScheme
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(4),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 232.dp),
-    ) {
-        item {
-            QuickActionTile(
-                icon = Icons.Rounded.Tune,
-                text = "选择",
-                container = scheme.surfaceContainerHighest,
-                content = scheme.onSurface,
-                onClick = onConfigure,
-            )
-        }
-        item {
-            QuickActionTile(
-                icon = Icons.Rounded.Add,
-                text = "新建",
-                container = scheme.surfaceContainerHighest,
-                content = scheme.onSurface,
-                onClick = onCreate,
-            )
-        }
-        items(albums) { name ->
-            QuickAlbumTile(
-                name = name,
-                cover = covers[name],
-                onClick = { onPick(name) },
-            )
-        }
-    }
-}
-
-/** 方形操作卡（选择 / 新建）。 */
-@Composable
-private fun QuickActionTile(
-    icon: ImageVector,
-    text: String,
-    container: Color,
-    content: Color,
-    onClick: () -> Unit,
-) {
-    Column(
-        Modifier
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(16.dp))
-            .background(container)
-            .clickable(onClick = onClick)
-            .padding(6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            color = content,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
-    }
-}
-
-/** 快捷相册卡片：封面缩略图 + 名字。 */
-@Composable
-private fun QuickAlbumTile(
-    name: String,
-    cover: Uri?,
-    onClick: () -> Unit,
-) {
-    Column(
-        Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (cover != null) {
-                AsyncImage(
-                    model = cover,
-                    contentDescription = name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    Icons.Rounded.Folder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-        Text(
-            name,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 3.dp),
-        )
     }
 }
 
@@ -806,7 +765,7 @@ private fun QuickAlbumPicker(
                 modifier = Modifier.padding(20.dp),
             )
         } else {
-            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 360.dp)) {
                 items(all) { name ->
                     val checked = name in picks
                     Row(
@@ -819,7 +778,10 @@ private fun QuickAlbumPicker(
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Checkbox(checked = checked, onCheckedChange = null)
+                        androidx.compose.material3.Checkbox(
+                            checked = checked,
+                            onCheckedChange = null,
+                        )
                         Spacer(Modifier.width(10.dp))
                         Text(
                             name,

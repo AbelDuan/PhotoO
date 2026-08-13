@@ -51,7 +51,10 @@ class ThumbnailFetcher(
     override suspend fun fetch(): SourceFetchResult {
         val file = thumbFile()
         if (!file.exists()) {
-            val bmp = systemThumbnail() ?: decodeSampled()
+            // 视频走视频缩略图表，图片走图片缩略图表 + 下采样兜底；
+            // 视频不能用 BitmapFactory 解码，所以视频路径不进 decodeSampled。
+            val bmp = if (isVideo()) videoThumbnail() ?: systemThumbnail()
+            else systemThumbnail() ?: decodeSampled()
             val bitmap = bmp ?: throw IOException("无法生成缩略图 ${data.uri}")
             file.parentFile?.mkdirs()
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it) }
@@ -62,6 +65,20 @@ class ThumbnailFetcher(
             mimeType = "image/jpeg",
             dataSource = DataSource.DISK,
         )
+    }
+
+    /** 视频内容 Uri 形如 content://.../video/media/<id>，据此区分视频与图片。 */
+    private fun isVideo(): Boolean = data.uri.toString().contains("/video/", ignoreCase = true)
+
+    /** 走视频缩略图表（API 兼容的静态方法），拿不到返回 null。 */
+    private fun videoThumbnail(): Bitmap? {
+        val id = runCatching { ContentUris.parseId(data.uri) }.getOrNull() ?: return null
+        return runCatching {
+            @Suppress("DEPRECATION")
+            MediaStore.Video.Thumbnails.getThumbnail(
+                resolver, id, MediaStore.Video.Thumbnails.MINI_KIND, null,
+            )
+        }.getOrNull()
     }
 
     /** 走系统缩略图表（API 兼容的静态方法），拿不到返回 null。 */

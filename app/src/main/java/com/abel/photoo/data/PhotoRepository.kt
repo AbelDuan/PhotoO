@@ -130,7 +130,10 @@ class PhotoRepository(
     suspend fun refresh() = refreshLock.withLock {
         _loading.value = true
         try {
-            val raw = withContext(Dispatchers.IO) { source.queryPhotos() }
+            val images = withContext(Dispatchers.IO) { source.queryPhotos() }
+            val videos = withContext(Dispatchers.IO) { source.queryVideos() }
+            // 图片与视频合并进同一份图库快照，统一管理；按时间倒序铺开。
+            val raw = (images + videos).sortedByDescending { it.dateTaken }
             val states = withContext(Dispatchers.IO) { db.loadAllStates() }
             val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
             val customAlbums = withContext(Dispatchers.IO) { db.listCustomAlbums() }
@@ -380,6 +383,17 @@ class PhotoRepository(
             refresh()
             emit("已恢复 ${ids.size} 张")
         }
+    }
+
+    /**
+     * 撤销时把刚删除的照片同步放回内存图库（不等系统/数据库回写）。
+     * 这样大图页能立刻跳回这张照片；随后 [restoreFromTrash] 的 refresh 会再校准一次。
+     */
+    fun reinsertPhotos(items: List<PhotoItem>) {
+        if (items.isEmpty()) return
+        val set = items.mapTo(HashSet()) { it.id }
+        val existing = _photos.value.filterNot { it.id in set }
+        _photos.value = (existing + items).sortedByDescending { it.dateTaken }
     }
 
     /** 回收站里的"彻底删除"：这一步才真正同步给系统。 */
@@ -670,7 +684,8 @@ class PhotoRepository(
                 // 先把已知结果推上去，界面立刻有内容，不用等这轮扫描跑完。
                 publishGeo(known.values.filter { it.located })
 
-                val todo = all.filter { it.id !in known }
+                // 视频一般没有可用的拍摄坐标 EXIF（且 exif 解析按图片设计），跳过。
+                val todo = all.filter { it.id !in known && it.mimeType.startsWith("image/") }
                 if (todo.isEmpty()) {
                     _geoScanState.value = GeoScanState.Done(known.values.count { it.located })
                     return@launch
@@ -1036,7 +1051,8 @@ class PhotoRepository(
                 }
 
                 val all = _photos.value
-                val todo = all.filter { it.id !in hashCache }
+                // 视频不参与相似比对（视频无法算感知哈希），只扫描图片。
+                val todo = all.filter { it.id !in hashCache && it.mimeType.startsWith("image/") }
                 _scanState.value = ScanState.Running(0, todo.size)
 
                 if (todo.isNotEmpty()) {
@@ -1090,7 +1106,8 @@ class PhotoRepository(
                 return@launch
             }
             val resolved = withContext(Dispatchers.IO) { db.listResolvedGroups() }
-            val snapshot = _photos.value
+            // 相似分组只基于图片；视频无感知哈希，混入会让聚类产出空组或报错。
+            val snapshot = _photos.value.filter { it.mimeType.startsWith("image/") }
             val groups = withContext(Dispatchers.Default) {
                 SimilarityEngine.buildGroups(snapshot, hashCache, level, strategy, resolved)
             }

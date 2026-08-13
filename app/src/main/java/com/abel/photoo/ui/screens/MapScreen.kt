@@ -35,12 +35,15 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -104,6 +107,8 @@ fun MapScreen(
     val settings by vm.settings.collectAsStateWithLifecycle()
 
     var level by remember { mutableStateOf(com.abel.photoo.data.geo.GeoClusterer.Level.DISTRICT) }
+    // 地点搜索关键字：按地址名 / 经纬度文本 / 照片名过滤拍摄地点。
+    var query by remember { mutableStateOf("") }
     // 已经解析出的地址名（cluster.key -> 地址）。一律由 Kotlin 侧解析：
     // 有高德 key 时内部走高德 REST 逆地理（失败回退设备 Geocoder），没 key 直接走设备 Geocoder。
     // 不依赖 WebView 里 JS 的逆地理——key 无效 / JS 加载失败时地址依然能出来。
@@ -132,6 +137,12 @@ fun MapScreen(
 
     val located = geoPoints.size
     val useOnline = settings.amapKey.isNotBlank()
+
+    // 搜索时只保留命中的地点（关键字为空则全部显示）。
+    val shown = remember(clusters, query, places) {
+        if (query.isBlank()) clusters
+        else clusters.filter { matchCluster(it, places[it.key], query) }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -209,6 +220,27 @@ fun MapScreen(
                         )
                     }
                 }
+
+                if (located > 0) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("搜索拍摄地点，例如城市 / 区县 / 路名") },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Search, null, modifier = Modifier.size(18.dp))
+                        },
+                        trailingIcon = if (query.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { query = "" }) {
+                                    Icon(Icons.Rounded.Clear, "清空搜索")
+                                }
+                            }
+                        } else null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                    )
+                }
             }
         }
 
@@ -263,7 +295,17 @@ fun MapScreen(
                 }
             }
         } else {
-            items(clusters, key = { it.key }) { cluster ->
+            if (query.isNotBlank()) {
+                item("searchhint") {
+                    Text(
+                        "找到 ${shown.size} 个地点 · 点击进入查看照片",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                    )
+                }
+            }
+            items(shown, key = { it.key }) { cluster ->
                 ClusterCard(
                     cluster = cluster,
                     place = places[cluster.key],
@@ -271,8 +313,28 @@ fun MapScreen(
                     onOpenCluster = { onOpenCluster(cluster.copy(place = places[cluster.key])) },
                 )
             }
+            if (query.isNotBlank() && shown.isEmpty()) {
+                item("noresult") {
+                    Box(Modifier.fillMaxWidth().padding(top = 24.dp)) {
+                        EmptyState(
+                            title = "没有匹配的拍摄地点",
+                            subtitle = "换个城市、区县或路名试试；也可以搜经纬度的数字。",
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+/** 搜索命中判定：地址名 / 经纬度文本 / 照片名 任一包含关键字即算命中（忽略大小写）。 */
+private fun matchCluster(c: GeoCluster, place: String?, q: String): Boolean {
+    val ql = q.lowercase().trim()
+    if (ql.isBlank()) return true
+    if (place?.lowercase()?.contains(ql) == true) return true
+    if (Format.latLon(c.lat, c.lon).lowercase().contains(ql)) return true
+    if (c.photos.any { it.displayName.lowercase().contains(ql) }) return true
+    return false
 }
 
 /** 一个地点的卡片：标题 + 张数/时间跨度 + 一排缩略图；点标题区进入该地址相册。布局对齐相似栏目。 */

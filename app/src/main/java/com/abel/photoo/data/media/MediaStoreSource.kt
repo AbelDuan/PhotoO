@@ -157,6 +157,77 @@ class MediaStoreSource(private val context: Context) {
         return out
     }
 
+    /** 读取全部视频（mp4/mov 等）。视频与图片使用不同的 MediaStore 集合，
+     *  这里单独查出来后和图片合并到同一份图库快照里，统一管理（删除 / 归档 / 查看）。 */
+    fun queryVideos(): List<PhotoItem> {
+        val out = ArrayList<PhotoItem>(128)
+        val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val proj = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.BUCKET_ID,
+            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Video.Media.DATE_TAKEN,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.MIME_TYPE,
+            MediaStore.Video.Media.RELATIVE_PATH,
+            MediaStore.Video.Media.ORIENTATION,
+        )
+        runCatching {
+            context.contentResolver.query(uri, proj, null, null, null)
+        }.getOrNull()?.use { c ->
+            val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val bucketIdIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_ID)
+            val bucketNameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+            val takenIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
+            val modifiedIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)
+            val sizeIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+            val widthIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
+            val heightIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            val mimeIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)
+            val pathIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
+            val orientationIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.ORIENTATION)
+
+            while (c.moveToNext()) {
+                try {
+                    val id = c.getLong(idIdx)
+                    val modifiedMs = (c.getLongOrNull(modifiedIdx) ?: 0L) * 1000L
+                    val takenMs = c.getLongOrNull(takenIdx)?.takeIf { it > 0L } ?: modifiedMs
+                    val relative = c.getStringOrNull(pathIdx).orEmpty()
+                    val bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong()
+                    val bucketName = c.getStringOrNull(bucketNameIdx)
+                        ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
+                    val fullUri = ContentUris.withAppendedId(uri, id)
+                    val name = c.getStringOrNull(nameIdx).orEmpty()
+                    out += PhotoItem(
+                        id = id,
+                        uri = fullUri,
+                        thumbUri = fullUri,
+                        displayName = name,
+                        bucketId = bucketId,
+                        bucketName = bucketName,
+                        relativePath = relative,
+                        dateTaken = takenMs,
+                        dateModified = modifiedMs,
+                        size = c.getLongOrNull(sizeIdx) ?: 0L,
+                        width = c.getIntOrNull(widthIdx) ?: 0,
+                        height = c.getIntOrNull(heightIdx) ?: 0,
+                        mimeType = c.getStringOrNull(mimeIdx).orEmpty(),
+                        orientation = c.getIntOrNull(orientationIdx) ?: 0,
+                        isVideo = true,
+                    )
+                } catch (e: Throwable) {
+                    android.util.Log.w("PhotoO", "skip unreadable video row", e)
+                }
+            }
+        }
+        return out
+    }
+
     /** 由照片列表聚合出相册列表，避免第二次查询。 */
     fun buildAlbums(photos: List<PhotoItem>): List<AlbumItem> {
         if (photos.isEmpty()) return emptyList()

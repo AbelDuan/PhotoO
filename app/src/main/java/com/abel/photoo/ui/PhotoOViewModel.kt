@@ -28,7 +28,12 @@ import kotlinx.coroutines.launch
  * "撤销"动作携带的信息：最近一次移入回收站的照片数量与 id 集合。
  * 界面据此弹出带"撤销"按钮的 Snackbar，点击后把这些照片放回图库。
  */
-data class UndoEvent(val count: Int, val ids: Set<Long>)
+data class UndoEvent(
+    val count: Int,
+    val ids: Set<Long>,
+    /** 被删除的照片本体，撤销时同步放回内存图库，大图页才能立刻跳回这张照片。 */
+    val items: List<PhotoItem> = emptyList(),
+)
 
 /**
  * 全应用共用的一个 ViewModel。
@@ -92,8 +97,11 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
 
     fun undoLastTrash() {
         val ev = _undoEvent.value ?: return
-        repo.restoreFromTrash(ev.ids)
+        // 先把照片同步放回内存图库（不等系统/数据库回写），撤销后大图页能立刻
+        // 跳回这张照片；随后异步走正式的恢复流程，refresh 会再校准一次。
+        repo.reinsertPhotos(ev.items)
         _undoEvent.value = null
+        repo.restoreFromTrash(ev.ids)
     }
 
     fun clearUndoEvent() {
@@ -192,6 +200,7 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
             repo.emit("还没有勾选任何照片")
             return
         }
+        val items = photos.value.filter { it.id in ids }
         val affected = similarGroups.value.filter { g -> g.items.any { it.id in ids } }
         repo.moveToTrash(ids)
         // 组内其余留下来的都算"已保留"，这样整理进度才会走。
@@ -199,7 +208,7 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         if (keepers.isNotEmpty()) repo.markReviewed(keepers, ReviewAction.KEPT)
         affected.forEach { repo.resolveGroup(it.key) }
         _similarPicks.value = emptySet()
-        if (ids.isNotEmpty()) _undoEvent.value = UndoEvent(ids.size, ids)
+        if (ids.isNotEmpty()) _undoEvent.value = UndoEvent(ids.size, ids, items)
     }
 
     // ------------------------------------------------------------------ EXIF
@@ -217,9 +226,10 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
 
     fun moveToTrash(ids: Collection<Long>) {
         val set = ids.toSet()
+        val items = photos.value.filter { it.id in set }
         repo.moveToTrash(set)
         _selection.value = _selection.value - set
-        if (set.isNotEmpty()) _undoEvent.value = UndoEvent(set.size, set)
+        if (set.isNotEmpty()) _undoEvent.value = UndoEvent(set.size, set, items)
     }
 
     fun restore(ids: Collection<Long>) = repo.restoreFromTrash(ids)
