@@ -317,8 +317,9 @@ fun LazyGridScope.timelineSections(
                     onLongClick = { onPhotoLongClick(photo) },
                 )
             }
-            if (dragSelect != null) {
-                // 拖选开启时额外包一层，把缩略图的屏幕包围盒上报给拖选状态。
+            if (dragSelect != null && selectionMode) {
+                // 仅在选择模式下才上报每张缩略图的屏幕包围盒（拖选命中检测用），
+                // 普通浏览/滚动时不包这层，避免每帧大量 onGloballyPositioned 回调拖慢列表。
                 Box(
                     Modifier.onGloballyPositioned { coords ->
                         if (coords.isAttached) {

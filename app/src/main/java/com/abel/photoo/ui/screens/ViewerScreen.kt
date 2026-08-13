@@ -7,6 +7,10 @@ import android.view.View
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -20,6 +24,7 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -80,6 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -87,6 +93,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -172,6 +180,9 @@ fun ViewerScreen(
     val scope = rememberCoroutineScope()
     // 是否正在编辑「快捷归入」的文件夹清单（底部的文件夹名由用户自行指定）。
     var showQuickPicker by remember { mutableStateOf(false) }
+    // 正在"飞出"的删除/退出副本：父层移除/退出当前照片后，由它渲染飞出淡出动画，
+    // 这样下一张照片能无缝跟上、不再等动画播完（见 confirmFly）。
+    var flying by remember { mutableStateOf<FlyingState?>(null) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
@@ -223,6 +234,17 @@ fun ViewerScreen(
             k // 默认停在"下一张"（删除后后面的项前移，当前页码正好落在新下一张）
         }
         onTrash(photo)
+    }
+
+    // 飞出方向已确定：先留住"飞出副本"，再立刻执行动作（删除会同步移除内存照片、
+    // 退出则稍候关闭）。副本由 FlyingPhoto 渲染飞出淡出，下一张照片无缝跟上。
+    fun confirmFly(dir: GestureDirection, photo: PhotoItem) {
+        flying = FlyingState(photo, dir)
+        when (actionOf(dir)) {
+            GestureAction.TRASH -> trash(photo)
+            GestureAction.CLOSE -> scope.launch { kotlinx.coroutines.delay(220); onClose() }
+            else -> Unit
+        }
     }
 
     fun runAction(action: GestureAction, photo: PhotoItem) {
@@ -334,6 +356,7 @@ fun ViewerScreen(
                     // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
                     // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
                     onFlyStart = { livePlaying = false },
+                    onFlyConfirm = { confirmFly(it, photo) },
                     onZoomChanged = { if (isCurrent) zoomed = it },
                     overlay = if (isCurrent && livePlaying && liveUri != null) {
                         {
@@ -348,6 +371,12 @@ fun ViewerScreen(
                     } else null,
                 )
             }
+        }
+
+        // 删除 / 退出时：当前照片已同步移除，这里渲染一张"飞出副本"盖在上面做飞出淡出，
+        // 让下一张照片无缝跟上来（不再等本页飞完才换图）。
+        flying?.let { st ->
+            FlyingPhoto(state = st, onDone = { flying = null })
         }
 
         AnimatedVisibility(
@@ -430,6 +459,50 @@ fun ViewerScreen(
                 onClose = { showQuickPicker = false },
             )
         }
+    }
+}
+
+/** 飞出副本：删除 / 退出时盖在上面的照片，朝手势方向飞出并淡出。 */
+private data class FlyingState(val photo: PhotoItem, val dir: GestureDirection)
+
+/**
+ * 删除 / 退出"飞出"动画的副本层。
+ *
+ * 当前照片已被父层同步移除（内存图库瞬间更新），所以这一层只负责把被删/退出的那张
+ * 按屏高比例朝手势方向飞出 + 轻微旋转 + 淡出，飞完 [onDone] 即清掉。
+ * 下一张照片在它下面无缝跟上，整体不再有"等动画播完才换图"的延迟感。
+ */
+@Composable
+private fun FlyingPhoto(state: FlyingState, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val off = remember { Animatable(0f) }
+    val flyAlpha = remember { Animatable(1f) }
+    val rot = remember { Animatable(0f) }
+    // 竖向手势：上滑删除(UP=-1)向上飞、下滑退出(DOWN=+1)向下飞。
+    val sign = if (state.dir == GestureDirection.UP) -1f else 1f
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val h = with(LocalDensity.current) { maxHeight.toPx() }
+        LaunchedEffect(Unit) {
+            // 三段动画并行跑完（都是 220ms）后再清掉副本层，飞出过程才完整可见。
+            kotlinx.coroutines.coroutineScope {
+                launch { off.animateTo(sign * h * 1.3f, tween(220, easing = FastOutLinearInEasing)) }
+                launch { flyAlpha.animateTo(0f, tween(220, easing = FastOutLinearInEasing)) }
+                launch { rot.animateTo(sign * 10f, tween(220, easing = FastOutLinearInEasing)) }
+            }
+            onDone()
+        }
+        AsyncImage(
+            model = state.photo.thumbUri ?: state.photo.uri,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = off.value
+                    alpha = flyAlpha.value
+                    rotationZ = rot.value
+                },
+        )
     }
 }
 
@@ -646,18 +719,45 @@ private fun VideoPage(
 ) {
     var playing by remember(photo.id) { mutableStateOf(false) }
     var viewRef by remember { mutableStateOf<VideoView?>(null) }
+    // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
+    var exiting by remember { mutableStateOf(false) }
+    var exitDir by remember { mutableStateOf(GestureDirection.UP) }
+    val offY = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val flyProgress by animateFloatAsState(
+        targetValue = if (exiting) 1f else 0f,
+        animationSpec = tween(220, easing = FastOutLinearInEasing),
+        label = "vidFly",
+    )
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                VideoView(ctx).apply {
-                    setVideoURI(photo.uri)
-                    setOnPreparedListener { it.isLooping = false }
-                    setOnCompletionListener { playing = false }
-                }.also { viewRef = it }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 手势层：只在纵向拖拽时消费事件，让左右横滑（翻页）与中央播放按钮照常工作。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    // 拖拽阶段：视频不透明跟手；飞出阶段：按屏高比例位移 + 淡出 + 轻微旋转。
+                    translationY = offY.value + if (exiting) {
+                        (if (exitDir == GestureDirection.UP) -1f else 1f) *
+                            flyProgress * size.height * 1.3f
+                    } else 0f
+                    alpha = if (exiting) (1f - flyProgress).coerceIn(0f, 1f) else 1f
+                    rotationZ = if (exiting) {
+                        (if (exitDir == GestureDirection.UP) -1f else 1f) * 10f * flyProgress
+                    } else 0f
+                },
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    VideoView(ctx).apply {
+                        setVideoURI(photo.uri)
+                        setOnPreparedListener { it.isLooping = false }
+                        setOnCompletionListener { playing = false }
+                    }.also { viewRef = it }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        // 手势层：纵向拖拽时整段视频随手指平移（消费事件），横向滑交给 Pager 翻页，
+        // 单击显隐工具栏。播放中拖拽不暂停，视频继续播。
         Box(
             Modifier
                 .fillMaxSize()
@@ -671,18 +771,31 @@ private fun VideoPage(
                         do {
                             val event = awaitPointerEvent()
                             val pressed = event.changes.any { it.pressed }
-                        if (!axisV) {
-                            val pan = event.calculatePan()
-                            totalX += pan.x
-                            totalY += pan.y
-                            if (abs(totalY) > slop) axisV = true
-                        }
-                    } while (event.changes.any { it.pressed })
+                            if (!axisV) {
+                                val pan = event.calculatePan()
+                                totalX += pan.x
+                                totalY += pan.y
+                                if (abs(totalY) > slop) axisV = true
+                            }
+                            if (axisV) {
+                                val pan = event.calculatePan()
+                                scope.launch { offY.snapTo(offY.value + pan.y) }
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        } while (event.changes.any { it.pressed })
                         if (axisV) {
                             val threshold = size.height * 0.16f / sensitivity.coerceAtLeast(0.2f)
                             when {
-                                totalY < -threshold -> onSwipe(GestureDirection.UP)
-                                totalY > threshold -> onSwipe(GestureDirection.DOWN)
+                                totalY < -threshold -> {
+                                    exitDir = GestureDirection.UP
+                                    exiting = true
+                                    scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.UP) }
+                                }
+                                totalY > threshold -> {
+                                    exitDir = GestureDirection.DOWN
+                                    exiting = true
+                                    scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.DOWN) }
+                                }
                                 abs(totalX) < slop && abs(totalY) < slop -> onToggleChrome()
                                 else -> Unit // 横向滑动交给 Pager 翻页，不切换工具栏
                             }
@@ -824,14 +937,22 @@ private fun QuickAlbumPicker(
     onClose: () -> Unit,
 ) {
     var picks by remember(all, selected) { mutableStateOf(selected.toSet()) }
-    Column(
+    // 居中弹窗：半透明遮罩点空白处即关，内容卡片在屏幕正中，不再贴顶。
+    Box(
         Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(horizontal = 8.dp, vertical = 12.dp),
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(onClick = onClose),
+        contentAlignment = Alignment.Center,
     ) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(22.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 8.dp, vertical = 12.dp),
+        ) {
         Row(
             Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -889,6 +1010,7 @@ private fun QuickAlbumPicker(
                 }
             }
         }
+    }
     }
     BackHandler(enabled = true) { onClose() }
 }

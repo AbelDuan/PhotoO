@@ -281,16 +281,24 @@ class PhotoRepository(
         if (targets.isEmpty()) return
         PhotoLog.i("Trash", "move: ids=$ids systemTrash=${prefs.current.alsoSystemTrash}")
 
+        // 关键：内存内立即隐藏，列表 / 大图瞬间更新 —— 上滑删除后下一张照片立刻出现，
+        // 不再等系统回收站确认或数据库写入（之前"等一会"的根因就在这里）。
+        // 系统回收站 / 数据库写入 / 派生重算全部放到下面的异步块里做。
+        _photos.value = _photos.value.filterNot { it.id in idSet }
+
         scope.launch {
             if (prefs.current.alsoSystemTrash) {
                 val result = ops.setSystemTrashed(targets.map { it.uri }, true)
                 if (result is OpResult.Cancelled) {
                     PhotoLog.i("Trash", "cancelled by user")
+                    // 用户取消：把刚从内存移除的照片放回，等价于撤销这次删除。
+                    reinsertPhotos(targets)
                     emit("已取消删除")
                     return@launch
                 }
                 if (result is OpResult.Failure) {
                     PhotoLog.w("Trash", "system-trash-failed: ${result.message}")
+                    reinsertPhotos(targets)
                     emit(result.message)
                     return@launch
                 }
@@ -310,9 +318,6 @@ class PhotoRepository(
                 )
             }
             withContext(Dispatchers.IO) { db.putTrash(rows) }
-            // 关键：内存内立即隐藏，列表/大图瞬间更新，不再全量重查 MediaStore
-            // （之前上滑"等一会"的根因就是 refresh() 把整库重新拉了一遍）。
-            _photos.value = _photos.value.filterNot { it.id in idSet }
             // 同步把被删照片从相似组里剔除，否则相似组 / 详情页的缩略图还留在原处。
             _similarGroups.value = _similarGroups.value.map { g ->
                 if (g.items.any { it.id in idSet }) {

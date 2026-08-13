@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
@@ -41,6 +42,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -72,9 +74,10 @@ fun AlbumsScreen(
     var ordered by remember(albums) { mutableStateOf(albums) }
     LaunchedEffect(albums) { ordered = albums }
     var draggingIndex by remember { mutableStateOf(-1) }
-    var dragDelta by remember { mutableStateOf(0f) }
+    var dragDelta by remember { mutableStateOf(Offset.Zero) }
+    // 排序卡片的实时尺寸（2 列布局下用于把拖拽位移换算成行列位移）。
+    var itemSize by remember { mutableStateOf(IntSize.Zero) }
     val density = LocalDensity.current
-    val itemH = with(density) { 52.dp.toPx() }
 
     fun swap(from: Int, to: Int) {
         if (from == to || to !in ordered.indices) return
@@ -87,11 +90,11 @@ fun AlbumsScreen(
     fun commitReorder() {
         vm.setAlbumOrder(ordered.map { it.relativePath })
         draggingIndex = -1
-        dragDelta = 0f
+        dragDelta = Offset.Zero
     }
 
     LazyVerticalGrid(
-        columns = if (sortMode) GridCells.Fixed(1) else GridCells.Fixed(2),
+        columns = GridCells.Fixed(2),
         contentPadding = PaddingValues(
             start = 14.dp,
             end = 14.dp,
@@ -145,62 +148,75 @@ fun AlbumsScreen(
         val list = if (sortMode) ordered else albums
         items(list.size, key = { list[it].bucketId }) { i ->
             val album = list[i]
-            if (sortMode) {
-                // 排序模式：按名字一行一个，左侧拖动手柄长按拖动调整顺序。
-                val isDrag = i == draggingIndex
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest
-                            else MaterialTheme.colorScheme.surfaceContainerHigh
-                        )
-                        .then(if (isDrag) Modifier.offset { IntOffset(0, dragDelta.toInt()) } else Modifier)
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Rounded.DragHandle,
-                            contentDescription = "拖动排序",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(28.dp)
-                                .pointerInput(Unit) {
-                                    detectDragGestures(
-                                        onDragStart = { draggingIndex = i; dragDelta = 0f },
-                                        onDrag = { change: PointerInputChange, dragAmount: Offset ->
-                                            dragDelta += dragAmount.y
-                                            val shift = (dragDelta / itemH).roundToInt()
-                                            val t = (draggingIndex + shift).coerceIn(0, ordered.lastIndex)
-                                            if (t != draggingIndex) {
-                                                swap(draggingIndex, t)
-                                                draggingIndex = t
-                                                dragDelta -= shift * itemH
-                                            }
-                                        },
-                                        onDragEnd = { commitReorder() },
-                                        onDragCancel = { draggingIndex = -1; dragDelta = 0f },
-                                    )
-                                },
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            album.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                        )
-                    }
+        if (sortMode) {
+            // 排序模式：一行两个相册，左侧拖动手柄拖动调整顺序（支持跨列跨行 2D 拖拽）。
+            val isDrag = i == draggingIndex
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .onSizeChanged { itemSize = it }
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest
+                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                    .then(
+                        if (isDrag) {
+                            Modifier.offset { IntOffset(dragDelta.x.roundToInt(), dragDelta.y.roundToInt()) }
+                        } else Modifier
+                    )
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.DragHandle,
+                        contentDescription = "拖动排序",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .pointerInput(Unit) {
+                                detectDragGestures(
+                                    onDragStart = { draggingIndex = i; dragDelta = Offset.Zero },
+                                    onDrag = { change: PointerInputChange, dragAmount: Offset ->
+                                        dragDelta += dragAmount
+                                        // 2 列网格：拖拽位移换算成"列偏移 + 行偏移"。
+                                        val shiftCol = (dragDelta.x / itemSize.width.coerceAtLeast(1))
+                                            .roundToInt()
+                                        val shiftRow = (dragDelta.y / itemSize.height.coerceAtLeast(1))
+                                            .roundToInt()
+                                        val t = (draggingIndex + shiftRow * 2 + shiftCol)
+                                            .coerceIn(0, ordered.lastIndex)
+                                        if (t != draggingIndex) {
+                                            swap(draggingIndex, t)
+                                            draggingIndex = t
+                                            dragDelta -= Offset(
+                                                shiftCol * itemSize.width.toFloat(),
+                                                shiftRow * itemSize.height.toFloat(),
+                                            )
+                                        }
+                                    },
+                                    onDragEnd = { commitReorder() },
+                                    onDragCancel = { draggingIndex = -1; dragDelta = Offset.Zero },
+                                )
+                            },
+                    )
+                    Spacer(Modifier.width(10.dp))
                     Text(
-                        "${album.count} 张",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium,
+                        album.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
                     )
                 }
-            } else {
+                Text(
+                    "${album.count} 张",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        } else {
                 AlbumCard(
                     name = album.name,
                     count = album.count,

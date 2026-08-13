@@ -69,6 +69,9 @@ fun ZoomableImage(
     flyOut: (GestureDirection) -> Boolean = { false },
     /** 飞出动画刚开始时回调（在延时真正处理之前），用于立刻停掉 Live 等副作用。 */
     onFlyStart: (GestureDirection) -> Unit = {},
+    /** 飞出方向已确定、动画刚开始时回调：父层据此立刻移除/退出当前照片，
+     *  由父层负责渲染"飞出"副本，这样下一张照片能无缝跟上、不再等动画播完。 */
+    onFlyConfirm: (GestureDirection) -> Unit = {},
     /**
      * 盖在图片之上的内容（Live Photo 视频层）。
      *
@@ -215,15 +218,13 @@ fun ZoomableImage(
                     }
                     if (dir != null) {
                         if (flyOut(dir)) {
-                            // 用独立协程延时后再真正回调，避免动画被打断
-                            // （仓库层已是内存隐藏，无需整库刷新）。
+                            // 飞出动画刚开始就通知父层：父层立刻移除/退出当前照片，
+                            // 并负责渲染"飞出"副本（见 ViewerScreen 的 FlyingPhoto），
+                            // 因此下一张照片能无缝跟上，不用等本组件把动画播完。
                             exitDir = dir
                             exiting = true
                             onFlyStart(dir)
-                            scope.launch {
-                                kotlinx.coroutines.delay(260)
-                                onSwipe(dir)
-                            }
+                            onFlyConfirm(dir)
                         } else {
                             scope.launch {
                                 dragX.animateTo(0f, spring())
@@ -279,8 +280,10 @@ fun ZoomableImage(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
+            // Live Photo 视频层放进"会跟手平移"的盒子内部，竖向滑动时整张（含视频）
+            // 一起随手指移动，不会出现"视频留在原位、静态图飞走"的分裂观感。
+            overlay?.invoke(this)
         }
-        overlay?.invoke(this)
     }
 }
 
