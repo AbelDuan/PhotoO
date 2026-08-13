@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
@@ -61,6 +63,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -132,6 +135,14 @@ fun ViewerScreen(
     liveAutoPlay: Boolean = true,
     liveMuted: Boolean = true,
     onSetLiveMuted: (Boolean) -> Unit = {},
+    /** 大图底部快捷归入：用户自选的文件夹名（按出现顺序）。 */
+    quickAlbums: List<String> = emptyList(),
+    /** 全部可选文件夹名（用于「编辑快捷归入」面板）。 */
+    allAlbums: List<String> = emptyList(),
+    /** 保存用户勾选的快捷归入文件夹。 */
+    onSetQuickAlbums: (List<String>) -> Unit = {},
+    /** 把当前照片直接归入指定名称的文件夹。 */
+    onMoveToAlbumByName: (String, PhotoItem) -> Unit = { _, _ -> },
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -159,6 +170,8 @@ fun ViewerScreen(
     // 删除后想要落到的页码，等列表收缩（recomposition）后再跳转，避免越界黑屏。
     var pendingDeleteTarget by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
+    // 是否正在编辑「快捷归入」的文件夹清单（底部的文件夹名由用户自行指定）。
+    var showQuickPicker by remember { mutableStateOf(false) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
 
@@ -370,6 +383,19 @@ fun ViewerScreen(
             visible = chromeVisible && !infoVisible,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
+        ) {
+            QuickAlbumBar(
+                albums = quickAlbums,
+                onPick = { name -> current?.let { onMoveToAlbumByName(name, it) } },
+                onEdit = { showQuickPicker = true },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = chromeVisible && !infoVisible,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ViewerBottomBar(
@@ -393,6 +419,15 @@ fun ViewerScreen(
                 photo = current,
                 info = current?.let { exif[it.id] },
                 onClose = { infoVisible = false },
+            )
+        }
+
+        if (showQuickPicker) {
+            QuickAlbumPicker(
+                all = allAlbums,
+                selected = quickAlbums,
+                onApply = { onSetQuickAlbums(it); showQuickPicker = false },
+                onClose = { showQuickPicker = false },
             )
         }
     }
@@ -501,8 +536,7 @@ private fun LiveBadge(
                 letterSpacing = 0.6.sp,
             )
         }
-        if (playing) {
-            Box(
+        Box(
                 Modifier
                     .clip(RoundedCornerShape(50))
                     .background(Color.Black.copy(alpha = 0.55f))
@@ -517,7 +551,6 @@ private fun LiveBadge(
                     modifier = Modifier.size(15.dp),
                 )
             }
-        }
     }
 }
 
@@ -715,6 +748,70 @@ private fun ViewerBottomBar(
             )
         }
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
+    }
+}
+
+/**
+ * 大图页底部的「快捷归入」条：展示用户指定的文件夹名，点一下就归到对应文件夹。
+ * 只占一小块、最多显示两排并可滚动，不影响看照片；右侧「编辑」可重新勾选要显示哪些文件夹。
+ */
+@Composable
+private fun QuickAlbumBar(
+    albums: List<String>,
+    onPick: (String) -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = modifier,
+    ) {
+        FlowRow(
+            Modifier
+                .padding(8.dp)
+                .heightIn(max = 92.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (albums.isEmpty()) {
+                QuickChip("＋ 添加快捷归入", leadingIcon = Icons.Rounded.Add, onClick = onEdit)
+            } else {
+                albums.forEach { name ->
+                    QuickChip(name, onClick = { onPick(name) })
+                }
+                QuickChip("编辑", leadingIcon = Icons.Rounded.Add, onClick = onEdit)
+            }
+        }
+    }
+}
+
+/** 快捷归入条上的小药丸：文件夹名 / 「编辑」「添加」等。 */
+@Composable
+private fun QuickChip(
+    text: String,
+    onClick: () -> Unit,
+    leadingIcon: ImageVector? = null,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.16f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        leadingIcon?.let {
+            Icon(it, null, tint = Color.White, modifier = Modifier.size(15.dp))
+        }
+        Text(
+            text,
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+        )
     }
 }
 

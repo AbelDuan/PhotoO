@@ -144,105 +144,114 @@ fun MapScreen(
         else clusters.filter { matchCluster(it, places[it.key], query) }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 14.dp,
-            end = 14.dp,
-            top = contentPadding.calculateTopPadding() + 8.dp,
-            bottom = contentPadding.calculateBottomPadding() + 28.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-
-        item("controls") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize()) {
+        // 固定顶栏：统计 + 层级切换 + 搜索框，滚动时常驻不消失
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    top = contentPadding.calculateTopPadding(),
+                    start = 14.dp,
+                    end = 14.dp,
+                    bottom = 8.dp,
+                ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.Place,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "$located 张照片带位置 · ${clusters.size} 个地点",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { vm.scanGeo(force = true) }) {
                     Icon(
-                        Icons.Rounded.Place,
+                        Icons.Rounded.Refresh,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(16.dp),
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("重扫")
+                }
+            }
+
+            (scanState as? GeoScanState.Running)?.let { running ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        "$located 张照片带位置 · ${clusters.size} 个地点",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f),
+                        "正在读取 EXIF 位置… ${running.done} / ${running.total}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = { vm.scanGeo(force = true) }) {
-                        Icon(
-                            Icons.Rounded.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("重扫")
-                    }
-                }
-
-                (scanState as? GeoScanState.Running)?.let { running ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "正在读取 EXIF 位置… ${running.done} / ${running.total}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        LinearProgressIndicator(
-                            progress = {
-                                if (running.total == 0) 0f
-                                else running.done.toFloat() / running.total
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    com.abel.photoo.data.geo.GeoClusterer.Level.entries.forEach { lv ->
-                        FilterChip(
-                            selected = lv == level,
-                            onClick = { level = lv },
-                            label = { Text(lv.label) },
-                            leadingIcon = if (lv == level) {
-                                {
-                                    Icon(
-                                        Icons.Rounded.Layers,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            } else null,
-                        )
-                    }
-                }
-
-                if (located > 0) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("搜索拍摄地点，例如城市 / 区县 / 路名") },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Search, null, modifier = Modifier.size(18.dp))
+                    LinearProgressIndicator(
+                        progress = {
+                            if (running.total == 0) 0f
+                            else running.done.toFloat() / running.total
                         },
-                        trailingIcon = if (query.isNotEmpty()) {
-                            {
-                                IconButton(onClick = { query = "" }) {
-                                    Icon(Icons.Rounded.Clear, "清空搜索")
-                                }
-                            }
-                        } else null,
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                com.abel.photoo.data.geo.GeoClusterer.Level.entries.forEach { lv ->
+                    FilterChip(
+                        selected = lv == level,
+                        onClick = { level = lv },
+                        label = { Text(lv.label) },
+                        leadingIcon = if (lv == level) {
+                            {
+                                Icon(
+                                    Icons.Rounded.Layers,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        } else null,
+                    )
+                }
+            }
+
+            if (located > 0) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("搜索拍摄地点，例如城市 / 区县 / 路名") },
+                    leadingIcon = {
+                        Icon(Icons.Rounded.Search, null, modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = if (query.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Rounded.Clear, "清空搜索")
+                            }
+                        }
+                    } else null,
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                )
+            }
         }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = 14.dp,
+                end = 14.dp,
+                bottom = contentPadding.calculateBottomPadding() + 28.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
 
         if (clusters.isNotEmpty()) {
             item("plot") {
@@ -324,6 +333,7 @@ fun MapScreen(
                 }
             }
         }
+    }
     }
 }
 

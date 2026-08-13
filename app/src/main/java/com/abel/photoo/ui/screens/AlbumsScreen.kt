@@ -74,7 +74,7 @@ fun AlbumsScreen(
     var draggingIndex by remember { mutableStateOf(-1) }
     var dragDelta by remember { mutableStateOf(0f) }
     val density = LocalDensity.current
-    val itemH = with(density) { 60.dp.toPx() }
+    val itemH = with(density) { 52.dp.toPx() }
 
     fun swap(from: Int, to: Int) {
         if (from == to || to !in ordered.indices) return
@@ -99,7 +99,7 @@ fun AlbumsScreen(
             bottom = contentPadding.calculateBottomPadding() + 24.dp,
         ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(if (sortMode) 8.dp else 18.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
@@ -151,7 +151,7 @@ fun AlbumsScreen(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .height(60.dp)
+                        .height(52.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(
                             if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest

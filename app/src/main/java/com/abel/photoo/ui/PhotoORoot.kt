@@ -461,6 +461,13 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         liveAutoPlay = true,
                         liveMuted = liveMuted,
                         onSetLiveMuted = vm::setLiveMuted,
+                        // 大图底部「快捷归入」：用户自选的文件夹名，点一下即归档当前照片
+                        quickAlbums = settings.quickAlbums,
+                        allAlbums = albums.map { it.name }.distinct(),
+                        onSetQuickAlbums = vm::setQuickAlbums,
+                        onMoveToAlbumByName = { name, photo ->
+                            vm.moveToAlbumByName(name, listOf(photo.id))
+                        },
                     )
                 }
             }
