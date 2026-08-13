@@ -136,6 +136,47 @@ class MediaOps(
         moveToAlbum(uris, newRelativePath)
 
     /**
+     * 一次性把多张照片归入各自的目标相册（每张可能去不同目录）。
+     *
+     * 与 [moveToAlbum] 的区别：这里只对整批 URIS 发起**一次**系统写权限请求，
+     * 用户同意后再逐张静默改 RELATIVE_PATH —— 这样连续归入多张照片时不会每张都弹一次确认。
+     */
+    suspend fun applyAlbumMoves(moves: List<Pair<Uri, String>>): OpResult =
+        withContext(Dispatchers.IO) {
+            if (moves.isEmpty()) return@withContext OpResult.Success(0)
+            val uris = moves.map { it.first }.distinct()
+            // 整批只问一次"允许修改照片"。
+            val pre = requestConfirm { MediaStore.createWriteRequest(resolver, uris) }
+            if (pre == false) return@withContext OpResult.Cancelled
+
+            var done = 0
+            val failures = ArrayList<String>()
+            for ((uri, rawPath) in moves) {
+                val path = MediaStoreSource.normalizePath(rawPath)
+                if (path.isEmpty()) {
+                    failures += uri.lastPathSegment.orEmpty()
+                    continue
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, path)
+                }
+                try {
+                    if (resolver.update(uri, values, null) > 0) done++
+                    else failures += uri.lastPathSegment.orEmpty()
+                } catch (e: Exception) {
+                    failures += (e.message ?: uri.lastPathSegment.orEmpty())
+                }
+            }
+            when {
+                done == moves.size -> OpResult.Success(done)
+                done > 0 -> OpResult.Success(done)
+                else -> OpResult.Failure(
+                    failures.firstOrNull()?.let { "移动失败：$it" } ?: "移动失败"
+                )
+            }
+        }
+
+    /**
      * 发起系统确认。
      * @return true 用户同意；false 用户取消；null 表示这台设备压根没弹出来。
      */

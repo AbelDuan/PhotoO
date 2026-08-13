@@ -151,6 +151,8 @@ fun ViewerScreen(
     onSetQuickAlbums: (List<String>) -> Unit = {},
     /** 把当前照片直接归入指定名称的文件夹。 */
     onMoveToAlbumByName: (String, PhotoItem) -> Unit = { _, _ -> },
+    /** 外部（如相册选择器完成）通知本页"某张照片已处理完，按浏览方向切走"。 */
+    advanceSignal: Int = 0,
 ) {
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -245,6 +247,21 @@ fun ViewerScreen(
             GestureAction.CLOSE -> scope.launch { kotlinx.coroutines.delay(220); onClose() }
             else -> Unit
         }
+    }
+
+    /**
+     * 照片"处理完成"后的统一前进逻辑：按当前浏览方向切走。
+     * 从前往后浏览（lastNavDir=LEFT）→ 切下一张；从后往前浏览（lastNavDir=RIGHT）→ 切上一张。
+     * 删除走自己的 pendingDeleteTarget（列表收缩后停在正确页），不在这里处理。
+     */
+    fun proceedAfterAction() {
+        val delta = if (lastNavDir == GestureDirection.RIGHT) -1 else 1
+        goPage(delta)
+    }
+
+    // 外部（相册选择器落定）通知：处理完当前照片后按浏览方向切走。
+    LaunchedEffect(advanceSignal) {
+        if (advanceSignal > 0) proceedAfterAction()
     }
 
     fun runAction(action: GestureAction, photo: PhotoItem) {
@@ -416,7 +433,13 @@ fun ViewerScreen(
         ) {
             QuickAlbumBar(
                 albums = quickAlbums,
-                onPick = { name -> current?.let { onMoveToAlbumByName(name, it) } },
+                onPick = { name ->
+                    current?.let {
+                        onMoveToAlbumByName(name, it)
+                        // 归入和删除是同一个"处理完成"逻辑：处理后按浏览方向切到下一张/上一张。
+                        proceedAfterAction()
+                    }
+                },
                 onEdit = { showQuickPicker = true },
             )
         }
@@ -945,11 +968,13 @@ private fun QuickAlbumPicker(
             .clickable(onClick = onClose),
         contentAlignment = Alignment.Center,
     ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier.fillMaxWidth(0.92f),
+        ) {
         Column(
             Modifier
-                .fillMaxWidth(0.92f)
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface)
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 8.dp, vertical = 12.dp),
         ) {
@@ -958,7 +983,11 @@ private fun QuickAlbumPicker(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("快捷归入的文件夹", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "快捷归入的文件夹",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text(
                     "已选 ${picks.size} 个 · 会按勾选顺序显示在大图底部",
                     style = MaterialTheme.typography.labelSmall,
@@ -1004,6 +1033,7 @@ private fun QuickAlbumPicker(
                         Text(
                             name,
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                         )
                     }
@@ -1011,6 +1041,7 @@ private fun QuickAlbumPicker(
             }
         }
     }
+        }
     }
     BackHandler(enabled = true) { onClose() }
 }
@@ -1039,11 +1070,13 @@ private fun ExifPanel(
     onClose: () -> Unit,
 ) {
     if (photo == null) return
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
     Column(
         Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
-            .background(MaterialTheme.colorScheme.surface)
             .windowInsetsPadding(WindowInsets.navigationBars)
             .heightIn(max = 460.dp)
             .verticalScroll(rememberScrollState())
@@ -1054,6 +1087,7 @@ private fun ExifPanel(
             Text(
                 "照片信息",
                 style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
             Text(
@@ -1134,6 +1168,7 @@ private fun ExifPanel(
                     .padding(horizontal = 28.dp, vertical = 10.dp),
             )
         }
+    }
     }
     // 面板打开时，返回键先收起面板而不是退出查看器。
     BackHandler(enabled = true) { onClose() }

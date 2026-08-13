@@ -74,9 +74,12 @@ fun SettingsScreen(
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // 各二级分组的收起状态（持久化）；默认全部展开，仅"大图手势"默认收起。
+    // 各二级分组的收起状态（持久化）；默认全部收起，用户点开哪个就展开哪个。
     val collapsed by vm.collapsedGroups.collectAsStateWithLifecycle()
-    val defaultCollapsed = setOf("gesture")
+    val defaultCollapsed = setOf(
+        "appearance", "grid", "gesture", "live", "similar",
+        "delete", "review", "privacy", "map", "about",
+    )
     val grpExpanded: (String) -> Boolean = { !(collapsed + defaultCollapsed).contains(it) }
     val stats by vm.stats.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()

@@ -74,6 +74,13 @@ class PhotoRepository(
     private var scanJob: Job? = null
     private var hashCache: MutableMap<Long, PhotoODb.HashRow> = HashMap()
 
+    /**
+     * 归入相册的合并缓冲：连续把多张照片归入不同文件夹时，先记在这里，
+     * 一次性（带 1s 去抖）真正落盘，整批只弹一次系统写权限确认（见 [flushAlbumMoves]）。
+     */
+    private val pendingAlbumMoves = LinkedHashMap<Long, AlbumItem>()
+    private var flushAlbumJob: Job? = null
+
     private val _photos = MutableStateFlow<List<PhotoItem>>(emptyList())
     val photos: StateFlow<List<PhotoItem>> = _photos.asStateFlow()
 
@@ -562,6 +569,73 @@ class PhotoRepository(
             return
         }
         moveToAlbum(ids, album)
+    }
+
+    /**
+     * 归入相册（合并版）：把目标记到缓冲里，并不立刻写系统，
+     * 由 [flushAlbumMoves] 在用户停手后一次性真正移动 + 只弹一次权限确认。
+     * 大图页"快捷归入"走这条路，配合"处理后自动切下一张"体验最顺。
+     */
+    fun queueMoveToAlbum(ids: Collection<Long>, album: AlbumItem) {
+        if (ids.isEmpty()) return
+        val idSet = ids.toHashSet()
+        val targets = _photos.value.filter { it.id in idSet && it.bucketId != album.bucketId }
+        if (targets.isEmpty()) {
+            emit("这些照片已经在「${album.name}」里了")
+            return
+        }
+        targets.forEach { pendingAlbumMoves[it.id] = album }
+        scheduleFlushAlbum()
+    }
+
+    /** 按相册名归入（合并版），供大图页快捷归入调用。 */
+    fun queueMoveToAlbumByName(name: String, ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val album = _albums.value.filter { it.name == name }.maxByOrNull {
+            if (it.relativePath.contains("DCIM", ignoreCase = true)) Int.MAX_VALUE else it.count
+        } ?: _albums.value.firstOrNull { it.name == name }
+        if (album == null) {
+            emit("没有相册「$name」，请先在设置里添加快捷相册")
+            return
+        }
+        queueMoveToAlbum(ids, album)
+    }
+
+    /** 去抖：最后一次归入后 1s 才真正落盘，期间继续归入会合并进同一次权限确认。 */
+    private fun scheduleFlushAlbum() {
+        flushAlbumJob?.cancel()
+        flushAlbumJob = scope.launch {
+            kotlinx.coroutines.delay(1000)
+            flushAlbumMoves()
+        }
+    }
+
+    /** 把缓冲里的归入真正写到系统（整批一次权限请求），并回写本地整理状态。 */
+    fun flushAlbumMoves() {
+        flushAlbumJob?.cancel()
+        if (pendingAlbumMoves.isEmpty()) return
+        val snapshot = pendingAlbumMoves.toList() // List<Pair<Long, AlbumItem>>
+        pendingAlbumMoves.clear()
+        scope.launch {
+            val moves = snapshot.mapNotNull { (id, album) ->
+                val p = findPhoto(id) ?: return@mapNotNull null
+                p.uri to album.relativePath
+            }
+            if (moves.isEmpty()) return@launch
+            when (val result = ops.applyAlbumMoves(moves)) {
+                is OpResult.Cancelled -> emit("已取消归档")
+                is OpResult.Failure -> emit(result.message)
+                is OpResult.Success -> {
+                    val ids = snapshot.map { it.first }
+                    withContext(Dispatchers.IO) {
+                        db.markReviewed(ids, ReviewAction.MOVED)
+                        snapshot.forEach { (_, album) -> if (album.pendingLocal) db.removeCustomAlbum(album.name) }
+                    }
+                    refresh()
+                    emit("已归档 ${result.affected} 张")
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ Live Photo

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -62,6 +63,10 @@ fun AlbumsScreen(
     vm: PhotoOViewModel,
     contentPadding: PaddingValues,
     onOpenAlbum: (AlbumItem) -> Unit,
+    /** 收藏照片数量（用于"收藏"入口的计数）。 */
+    favoriteCount: Int = 0,
+    /** 打开"收藏"列表，单独 / 批量处理收藏的照片。 */
+    onOpenFavorites: () -> Unit = {},
 ) {
     val albums by vm.albums.collectAsStateWithLifecycle()
     var creating by remember { mutableStateOf(false) }
@@ -137,6 +142,26 @@ fun AlbumsScreen(
                     }
                 }
             }
+        }
+
+        // 收藏入口：点进去看全部已收藏照片，可单独 / 批量处理（删除、归入、取消收藏等）。
+        item(key = "favorites") {
+            AlbumCard(
+                name = "收藏",
+                count = favoriteCount,
+                coverUri = null,
+                pending = false,
+                latestDate = 0L,
+                onClick = onOpenFavorites,
+                onLongClick = {},
+                trailing = {
+                    Icon(
+                        Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                },
+            )
         }
 
         if (albums.isEmpty()) {

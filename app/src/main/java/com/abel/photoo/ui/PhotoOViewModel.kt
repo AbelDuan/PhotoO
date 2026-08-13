@@ -261,6 +261,14 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         repo.moveToAlbumByName(name, ids)
     }
 
+    /** 大图页快捷归入（合并版）：归入动作会先入队，停手后一次性落盘，整批只弹一次权限确认。 */
+    fun queueMoveToAlbumByName(name: String, ids: Collection<Long>) {
+        repo.queueMoveToAlbumByName(name, ids)
+    }
+
+    /** 强制把归入缓冲里的待处理项立即落盘（如退出大图页时调用）。 */
+    fun flushAlbumMoves() = repo.flushAlbumMoves()
+
     /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取并缓存）。 */
     suspend fun resolveLiveVideo(photo: PhotoItem): Uri? = repo.resolveLiveVideo(photo)
 

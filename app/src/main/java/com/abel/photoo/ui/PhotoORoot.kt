@@ -171,6 +171,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     var pickerTargets by remember { mutableStateOf<List<Long>?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var confirmTrashSelection by remember { mutableStateOf(false) }
+    // 相册选择器把照片归入完成后，用它通知大图页"处理完→按方向切走"。
+    var advanceSignal by remember { mutableStateOf(0) }
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -220,9 +222,11 @@ fun PhotoORoot(vm: PhotoOViewModel) {
             onExit = { reviewing = false },
             onMoveToAlbum = { pickerTargets = listOf(it.id) },
         )
-        AlbumPickerHost(vm, albums, pickerTargets, { creatingAlbum = true }) {
-            pickerTargets = null
-        }
+        AlbumPickerHost(
+            vm, albums, pickerTargets, { creatingAlbum = true },
+            onDismiss = { pickerTargets = null },
+            onAfterPick = { if (viewer != null) advanceSignal++ },
+        )
         NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
         return
     }
@@ -301,6 +305,15 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     vm = vm,
                     contentPadding = inner,
                     onOpenAlbum = { albumDetail = it },
+                    favoriteCount = photos.count { it.favorite },
+                    onOpenFavorites = {
+                        val favs = photos.filter { it.favorite }
+                        if (favs.isNotEmpty()) {
+                            viewer = ViewerRequest(favs.map { it.id }, favs.first().id)
+                        } else {
+                            vm.toast("还没有收藏的照片，点开照片后点底部的 ♥ 即可收藏")
+                        }
+                    },
                 )
 
                 Tab.MAP -> MapScreen(
@@ -447,7 +460,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         initialId = request.initialId,
                         exif = exif,
                         onRequestExif = vm::loadExif,
-                        onClose = { viewer = null },
+                        onClose = { vm.flushAlbumMoves(); viewer = null },
                         onTrash = { vm.moveToTrash(listOf(it.id)) },
                         onToggleFavorite = { vm.toggleFavorite(it.id) },
                         onMoveToAlbum = { pickerTargets = listOf(it.id) },
@@ -465,9 +478,12 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         quickAlbums = settings.quickAlbums,
                         allAlbums = albums.map { it.name }.distinct(),
                         onSetQuickAlbums = vm::setQuickAlbums,
+                        // 快捷归入走"合并队列"：停手后一次性落盘，整批只弹一次权限确认；
+                        // 处理后按浏览方向切到下一张/上一张（proceedAfterAction）。
                         onMoveToAlbumByName = { name, photo ->
-                            vm.moveToAlbumByName(name, listOf(photo.id))
+                            vm.queueMoveToAlbumByName(name, listOf(photo.id))
                         },
+                        advanceSignal = advanceSignal,
                     )
                 }
             }
@@ -501,9 +517,10 @@ fun PhotoORoot(vm: PhotoOViewModel) {
 
     // -------------------------------------------------------------- 公共弹窗
 
-    AlbumPickerHost(vm, albums, pickerTargets, { creatingAlbum = true }) {
-        pickerTargets = null
-    }
+    AlbumPickerHost(
+        vm, albums, pickerTargets, { creatingAlbum = true },
+        onDismiss = { pickerTargets = null },
+    )
 
     NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
 
@@ -531,6 +548,8 @@ private fun AlbumPickerHost(
     targets: List<Long>?,
     onCreateNew: () -> Unit,
     onDismiss: () -> Unit,
+    /** 选完相册后的回调（如大图页里要"处理完→切下一张"）。 */
+    onAfterPick: () -> Unit = {},
 ) {
     if (targets.isNullOrEmpty()) return
     AlbumPickerSheet(
@@ -539,6 +558,7 @@ private fun AlbumPickerHost(
         onPick = { album ->
             vm.moveToAlbum(targets, album)
             vm.clearSimilarPicks()
+            onAfterPick()
             onDismiss()
         },
         onCreateNew = onCreateNew,
