@@ -839,8 +839,8 @@ class PhotoRepository(
                 // 先把已知结果推上去，界面立刻有内容，不用等这轮扫描跑完。
                 publishGeo(known.values.filter { it.located })
 
-                // 视频一般没有可用的拍摄坐标 EXIF（且 exif 解析按图片设计），跳过。
-                val todo = all.filter { it.id !in known && it.mimeType.startsWith("image/") }
+                // 图片与视频都参与坐标扫描：带 GPS 的视频也应在地图上显示。
+                val todo = all.filter { it.id !in known && (it.mimeType.startsWith("image/") || it.isVideo) }
                 if (todo.isEmpty()) {
                     _geoScanState.value = GeoScanState.Done(known.values.count { it.located })
                     return@launch

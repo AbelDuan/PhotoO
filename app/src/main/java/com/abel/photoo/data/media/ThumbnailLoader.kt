@@ -5,6 +5,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import coil3.decode.DataSource
@@ -55,9 +56,10 @@ class ThumbnailFetcher(
     override suspend fun fetch(): SourceFetchResult {
         val file = thumbFile()
         if (!file.exists()) {
-            // 视频走视频缩略图表，图片走图片缩略图表 + 下采样兜底；
-            // 视频不能用 BitmapFactory 解码，所以视频路径不进 decodeSampled。
-            val bmp = if (isVideo()) videoThumbnail() ?: systemThumbnail()
+            // 视频走视频缩略图表，取不到再用 MediaMetadataRetriever 抽一帧（可靠兜底，
+            // 视频不能用 BitmapFactory 解码，所以视频路径绝不再进 decodeSampled）；
+            // 图片走图片缩略图表 + 下采样兜底。
+            val bmp = if (isVideo()) videoThumbnail() ?: videoFrame()
             else systemThumbnail() ?: decodeSampled()
             val bitmap = bmp ?: throw IOException("无法生成缩略图 ${data.uri}")
             file.parentFile?.mkdirs()
@@ -82,6 +84,25 @@ class ThumbnailFetcher(
             MediaStore.Video.Thumbnails.getThumbnail(
                 resolver, id, MediaStore.Video.Thumbnails.MINI_KIND, null,
             )
+        }.getOrNull()
+    }
+
+    /**
+     * 兜底：系统视频缩略图表取不到时，用 MediaMetadataRetriever 抽一帧作为封面。
+     * 这是视频缩略图最终可靠的来源——视频无法用 BitmapFactory 解码，
+     * 之前回退到 decodeSampled 会导致 fetch() 抛异常、视频在网格里变空白。
+     */
+    private fun videoFrame(): Bitmap? {
+        return runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, data.uri)
+                // 取靠近开头的第一帧同步点，避开纯黑开场；拿不到再退回首帧。
+                retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.getFrameAtTime(0)
+            } finally {
+                runCatching { retriever.release() }
+            }
         }.getOrNull()
     }
 

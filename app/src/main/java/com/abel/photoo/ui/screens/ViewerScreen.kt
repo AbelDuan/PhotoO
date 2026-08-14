@@ -54,7 +54,6 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Add
@@ -199,8 +198,9 @@ fun ViewerScreen(
     var showQuickPicker by remember { mutableStateOf(false) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
-    // 当前照片已暂存到的目标相册名（用于高亮），以及已暂存待归入的照片总数。
-    val stagedName = staged[current?.id]
+    // 已暂存待归入的照片总数，以及"有哪些相册已经有照片被标记归入"（用于高亮这些相册，
+    // 不论当前停在哪张，点过归入的相册都保持彩色标识，直到整批确认 / 清空）。
+    val stagedAlbums = staged.values.toSet()
     val stagedCount = staged.size
 
     // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
@@ -434,8 +434,7 @@ fun ViewerScreen(
             )
         }
 
-        // 左上角动作行：和微信 LIVE 徽标同一行。信息、归入相册两个按钮也放这里，
-        // 颜色 / 风格与 LIVE 一致（半透明黑底胶囊 + 白字）；确认归入 / 撤销已移到底部工具栏。
+        // 左上角只保留 LIVE 徽标（与静音开关同一行）；信息 / 归入相册已移回底部工具栏。
         Row(
             Modifier
                 .align(Alignment.TopStart)
@@ -452,50 +451,6 @@ fun ViewerScreen(
                     onToggleMute = { onSetLiveMuted(!liveMuted) },
                 )
             }
-            // 「信息」胶囊：与 LIVE 同款黑底风格，点开照片信息面板。
-            AnimatedVisibility(
-                visible = chromeVisible && !infoVisible,
-                enter = fadeIn() + slideInVertically { it },
-                exit = fadeOut() + slideOutVertically { it },
-            ) {
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable { infoVisible = true }
-                        .padding(horizontal = 11.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Rounded.Info,
-                        contentDescription = "信息",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            // 「归入相册」胶囊：与 LIVE 同款风格，点开系统相册选择器。
-            AnimatedVisibility(
-                visible = chromeVisible && !infoVisible,
-                enter = fadeIn() + slideInVertically { it },
-                exit = fadeOut() + slideOutVertically { it },
-            ) {
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable { current?.let(onMoveToAlbum) }
-                        .padding(horizontal = 11.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Rounded.Folder,
-                        contentDescription = "归入相册",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
         }
 
         AnimatedVisibility(
@@ -506,7 +461,7 @@ fun ViewerScreen(
         ) {
             QuickAlbumBar(
                 albums = quickAlbums,
-                stagedName = stagedName,
+                stagedAlbums = stagedAlbums,
                 onPick = { name ->
                     current?.let {
                         onMoveToAlbumByName(name, it)
@@ -527,7 +482,8 @@ fun ViewerScreen(
             ViewerBottomBar(
                 photo = current,
                 onFavorite = { current?.let(onToggleFavorite) },
-                onDelete = { current?.let(::trash) },
+                onInfo = { infoVisible = true },
+                onMoveAlbum = { current?.let(onMoveToAlbum) },
                 onConfirmStaged = onConfirmStaged,
                 stagedCount = stagedCount,
                 onUndo = onUndo,
@@ -876,7 +832,8 @@ private fun VideoPage(
 private fun ViewerBottomBar(
     photo: PhotoItem?,
     onFavorite: () -> Unit,
-    onDelete: () -> Unit,
+    onInfo: () -> Unit,
+    onMoveAlbum: () -> Unit,
     onConfirmStaged: () -> Unit = {},
     stagedCount: Int = 0,
     onUndo: () -> Unit = {},
@@ -902,6 +859,8 @@ private fun ViewerBottomBar(
             label = "收藏",
             onClick = onFavorite,
         )
+        ViewerAction(Icons.Rounded.Info, "信息", onInfo)
+        ViewerAction(Icons.Rounded.Folder, "归入", onMoveAlbum)
         // 「确认归入」：有暂存待归入照片时才出现，与下方图标风格一致。
         if (stagedCount > 0) {
             ViewerAction(
@@ -915,7 +874,6 @@ private fun ViewerBottomBar(
         if (undoAvailable) {
             ViewerAction(Icons.Rounded.Undo, "撤销 $undoCount", onUndo)
         }
-        ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
     }
 }
 
@@ -926,7 +884,7 @@ private fun ViewerBottomBar(
 @Composable
 private fun QuickAlbumBar(
     albums: List<String>,
-    stagedName: String? = null,
+    stagedAlbums: Set<String> = emptySet(),
     onPick: (String) -> Unit,
     onEdit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -951,8 +909,8 @@ private fun QuickAlbumBar(
                     QuickChip(
                         name,
                         onClick = { onPick(name) },
-                        // 已标记到该相册时高亮，提示"这张照片待会儿会归入这里"。
-                        highlighted = name == stagedName,
+                        // 只要有照片被标记归入该相册就高亮，提示"这些照片待会儿会归入这里"。
+                        highlighted = name in stagedAlbums,
                     )
                 }
                 QuickChip("编辑", leadingIcon = Icons.Rounded.Add, onClick = onEdit)
