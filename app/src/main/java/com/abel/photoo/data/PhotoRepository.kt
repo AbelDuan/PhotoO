@@ -180,7 +180,11 @@ class PhotoRepository(
             }
             val visible = decorated.filter { it.id !in trashIds }
 
-            _photos.value = visible
+            // 内容未变（同样一批照片、同样的本地状态）则不重设 value，
+            // 阻止 observer 驱动的 refresh 引发整树无谓重组。
+            if (!photosEquivalent(_photos.value, visible)) {
+                _photos.value = visible
+            }
             _trash.value = trashRows
                 .filter { it.id in liveIds }
                 .map {
@@ -243,6 +247,22 @@ class PhotoRepository(
         _photos.value.filterNot { it.reviewed }.sortedByDescending { it.dateTaken }
 
     fun findPhoto(id: Long): PhotoItem? = _photos.value.firstOrNull { it.id == id }
+
+    /**
+     * 两张照片列表是否等价（id 与会影响展示的本地状态一致）。
+     * 用于刷新后内容未变时跳过 StateFlow 重新发射，避免整棵 UI 树（尤其是时间线网格）
+     * 因本应用自身删除/归档触发的 MediaStore 变化、或外部应用改动而做无谓重组。
+     */
+    private fun photosEquivalent(a: List<PhotoItem>, b: List<PhotoItem>): Boolean {
+        if (a.size != b.size) return false
+        for (i in a.indices) {
+            val x = a[i]; val y = b[i]
+            if (x.id != y.id || x.reviewed != y.reviewed ||
+                x.favorite != y.favorite || x.liveType != y.liveType
+            ) return false
+        }
+        return true
+    }
 
     // ---------------------------------------------------------------- 处理状态
 

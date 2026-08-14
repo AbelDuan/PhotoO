@@ -92,8 +92,7 @@ fun ZoomableImage(
     val dragY = remember { Animatable(0f) }
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
-    // 已经解码好的主图画笔：飞出副本直接复用它画图，避免重新加载造成闪白/卡顿。
-    var capturedPainter by remember { mutableStateOf<Painter?>(null) }
+    // 飞出副本已移除：当前图片即删即切，不再需要缓存"已解码画笔"给副本复用。
     val scope = rememberCoroutineScope()
 
     // 翻页之后必须复位，否则下一张会继承上一张的缩放状态。
@@ -229,7 +228,7 @@ fun ZoomableImage(
                             // 由父层直接切到下一张/退出，干净利落、不再有"停留再消失"的割裂感。
                             exitDir = dir
                             onFlyStart(dir)
-                            onFlyConfirm(dir, Offset(dragX.value, dragY.value), capturedPainter)
+                            onFlyConfirm(dir, Offset(dragX.value, dragY.value), null)
                         } else {
                             scope.launch {
                                 dragX.animateTo(0f, spring())
@@ -271,25 +270,18 @@ fun ZoomableImage(
                     rotationZ = if (exiting) exitDir.sign * 10f * flyProgress else 0f
                 },
         ) {
-            if (thumbModel != null) {
-                AsyncImage(
-                    model = thumbModel,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            val mainPainter = rememberAsyncImagePainter(model = model)
-            capturedPainter = mainPainter
-            Image(
-                painter = mainPainter,
-                contentDescription = contentDescription,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-            // Live Photo 视频层放进"会跟手平移"的盒子内部，竖向滑动时整张（含视频）
-            // 一起随手指移动，不会出现"视频留在原位、静态图飞走"的分裂观感。
-            overlay?.invoke(this)
+        // 单图渲染：缩略图作为占位先秒出，主图(按屏幕尺寸下采样)加载完成后由 Coil 直接切换，
+        // 不再同时解码两张图叠着画，减少重复解码与过度绘制；组合期也不再写 state，避免额外重组。
+        AsyncImage(
+            model = model,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
+            placeholder = thumbModel?.let { rememberAsyncImagePainter(it) },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Live Photo 视频层放进"会跟手平移"的盒子内部，竖向滑动时整张（含视频）
+        // 一起随手指移动，不会出现"视频留在原位、静态图飞走"的分裂观感。
+        overlay?.invoke(this)
         }
     }
 }

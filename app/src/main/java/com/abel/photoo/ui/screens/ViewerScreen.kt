@@ -107,6 +107,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import com.abel.photoo.data.media.Thumbs
+import com.abel.photoo.data.media.ThumbRequest
 import com.abel.photoo.model.ExifInfo
 import com.abel.photoo.model.GestureAction
 import com.abel.photoo.model.GestureDirection
@@ -358,7 +360,7 @@ fun ViewerScreen(
         HorizontalPager(
             state = pagerState,
             userScrollEnabled = horizontalIsPaging && !zoomed,
-            beyondViewportPageCount = 1,
+            beyondViewportPageCount = 2,
             // 用照片 id 做页 key：删除中间某张后，后续页面的内容跟着 id 走，
             // 不会因为 position 前移而串页。
             key = { photos[it].id },
@@ -379,7 +381,8 @@ fun ViewerScreen(
                     model = photo.uri,
                     contentDescription = photo.displayName,
                     resetKey = photo.id,
-                    thumbModel = photo.thumbUri,
+                    // 传真实 360 缩略图占位：原图解码完前先秒出预览，且不会把原图再当占位加载一遍。
+                    thumbModel = ThumbRequest(photo.uri, Thumbs.TARGET),
                     sensitivity = sensitivity,
                     horizontalEnabled = !horizontalIsPaging,
                     onTap = { chromeVisible = !chromeVisible },
