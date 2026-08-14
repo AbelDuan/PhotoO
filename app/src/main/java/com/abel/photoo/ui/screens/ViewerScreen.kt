@@ -190,9 +190,6 @@ fun ViewerScreen(
     val scope = rememberCoroutineScope()
     // 是否正在编辑「快捷归入」的文件夹清单（底部的文件夹名由用户自行指定）。
     var showQuickPicker by remember { mutableStateOf(false) }
-    // 正在"飞出"的删除/退出副本：父层移除/退出当前照片后，由它渲染飞出淡出动画，
-    // 这样下一张照片能无缝跟上、不再等动画播完（见 confirmFly）。
-    var flying by remember { mutableStateOf<FlyingState?>(null) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
     // 当前照片已暂存到的目标相册名（用于高亮），以及已暂存待归入的照片总数。
@@ -264,13 +261,12 @@ fun ViewerScreen(
         onTrash(photo)
     }
 
-    // 飞出方向已确定：先留住"飞出副本"，再立刻执行动作（删除会同步移除内存照片、
-    // 退出则稍候关闭）。副本由 FlyingPhoto 渲染飞出淡出，下一张照片无缝跟上。
+    // 飞出方向已确定：删除立即移除内存照片（Pager 已预载下一张，直接切到下一张，
+    // 不再用全屏"飞出副本"盖着——那样会先停留再消失）。退出则直接关闭。
     fun confirmFly(dir: GestureDirection, photo: PhotoItem, startOffset: Offset = Offset.Zero, painter: Painter? = null) {
-        flying = FlyingState(photo, dir, startOffset.x, startOffset.y, painter)
         when (actionOf(dir)) {
             GestureAction.TRASH -> trash(photo)
-            GestureAction.CLOSE -> scope.launch { kotlinx.coroutines.delay(220); onClose() }
+            GestureAction.CLOSE -> onClose()
             else -> Unit
         }
     }
@@ -416,12 +412,6 @@ fun ViewerScreen(
             }
         }
 
-        // 删除 / 退出时：当前照片已同步移除，这里渲染一张"飞出副本"盖在上面做飞出淡出，
-        // 让下一张照片无缝跟上来（不再等本页飞完才换图）。
-        flying?.let { st ->
-            FlyingPhoto(state = st, onDone = { flying = null })
-        }
-
         AnimatedVisibility(
             visible = chromeVisible,
             enter = fadeIn(),
@@ -451,6 +441,41 @@ fun ViewerScreen(
             )
         }
 
+        // 「确认归入」按钮：浮在快捷归入条上方，与归入条各自独立定位、互不重叠；
+        // 归入条始终固定在底部 96dp 处，按钮出现时不会被它顶上去（不再整体上移）。
+        AnimatedVisibility(
+            visible = stagedCount > 0 && chromeVisible && !infoVisible,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 272.dp),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(20.dp),
+                tonalElevation = 6.dp,
+                modifier = Modifier.clickable { onConfirmStaged() },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(19.dp),
+                    )
+                    Text(
+                        "确认归入 $stagedCount 张",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+
         AnimatedVisibility(
             visible = chromeVisible && !infoVisible,
             enter = fadeIn() + slideInVertically { it },
@@ -469,41 +494,6 @@ fun ViewerScreen(
                 },
                 onEdit = { showQuickPicker = true },
             )
-
-            // 已标记若干照片待归入时，常驻一个"确认归入"按钮：点一下整批一次性写盘，
-            // 全程只弹一次系统权限确认。看照片过程中可一路标记，最后统一确认。
-            AnimatedVisibility(
-                visible = stagedCount > 0 && chromeVisible && !infoVisible,
-                enter = fadeIn() + slideInVertically { it },
-                exit = fadeOut() + slideOutVertically { it },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp),
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(20.dp),
-                    tonalElevation = 6.dp,
-                    modifier = Modifier.clickable { onConfirmStaged() },
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            Icons.Rounded.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            "确认归入 $stagedCount 张",
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-            }
         }
 
         AnimatedVisibility(
@@ -542,75 +532,6 @@ fun ViewerScreen(
                 selected = quickAlbums,
                 onApply = { onSetQuickAlbums(it); showQuickPicker = false },
                 onClose = { showQuickPicker = false },
-            )
-        }
-    }
-}
-
-/** 飞出副本：删除 / 退出时盖在上面的照片，朝手势方向飞出并淡出。 */
-private data class FlyingState(
-    val photo: PhotoItem,
-    val dir: GestureDirection,
-    /** 手指松手瞬间图片的位移，飞出从这里起步，避免"先回弹到中心再飞"的跳变。 */
-    val startX: Float,
-    val startY: Float,
-    /** 已解码好的主图画笔：直接复用画图，避免重新加载造成的闪白 / 卡顿。 */
-    val painter: Painter? = null,
-)
-
-/**
- * 删除 / 退出"飞出"动画的副本层。
- *
- * 当前照片已被父层同步移除（内存图库瞬间更新），所以这一层只负责把被删/退出的那张
- * 从手指松手时的位置朝手势方向飞出 + 轻微旋转 + 淡出，飞完 [onDone] 即清掉。
- * 起点继承 ZoomableImage 离手瞬间的位移，整张图平滑接续飞出、不再回弹到中心，
- * 下一张照片在它下面无缝跟上，整体不再有"先卡一下再换图"的割裂感。
- */
-@Composable
-private fun FlyingPhoto(state: FlyingState, onDone: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val horizontal = state.dir == GestureDirection.LEFT || state.dir == GestureDirection.RIGHT
-    val sign = if (state.dir == GestureDirection.UP || state.dir == GestureDirection.LEFT) -1f else 1f
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val h = with(LocalDensity.current) { maxHeight.toPx() }
-        val w = with(LocalDensity.current) { maxWidth.toPx() }
-        // 主轴（飞出方向）从手指位置起步，副轴（垂直方向）固定在手指位移处。
-        val main = remember { Animatable(if (horizontal) state.startX else state.startY) }
-        val flyAlpha = remember { Animatable(1f) }
-        val rot = remember { Animatable(0f) }
-        LaunchedEffect(Unit) {
-            // 三段动画并行跑完（都是 220ms）后再清掉副本层，飞出过程才完整可见。
-            val start = if (horizontal) state.startX else state.startY
-            val travel = if (horizontal) w else h
-            kotlinx.coroutines.coroutineScope {
-                launch { main.animateTo(start + sign * travel * 1.3f, tween(220, easing = FastOutLinearInEasing)) }
-                launch { flyAlpha.animateTo(0f, tween(220, easing = FastOutLinearInEasing)) }
-                launch { rot.animateTo(sign * 10f, tween(220, easing = FastOutLinearInEasing)) }
-            }
-            onDone()
-        }
-        val flyModifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                translationX = if (horizontal) main.value else state.startX
-                translationY = if (horizontal) state.startY else main.value
-                alpha = flyAlpha.value
-                rotationZ = rot.value
-            }
-        if (state.painter != null) {
-            // 复用当前照片已经解码好的画笔，避免副本重新加载导致的闪白 / 卡顿 —— 飞出才连贯自然。
-            Image(
-                painter = state.painter,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = flyModifier,
-            )
-        } else {
-            AsyncImage(
-                model = state.photo.thumbUri ?: state.photo.uri,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = flyModifier,
             )
         }
     }
@@ -994,7 +915,7 @@ private fun QuickAlbumBar(
         FlowRow(
             Modifier
                 .padding(8.dp)
-                .heightIn(max = 92.dp)
+                .heightIn(max = 160.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
