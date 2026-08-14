@@ -431,12 +431,11 @@ fun ViewerScreen(
                 index = pagerState.currentPage + 1,
                 total = photos.size,
                 onClose = onClose,
-                onInfo = { infoVisible = !infoVisible },
             )
         }
 
-        // 左上角动作行：和微信 LIVE 徽标同一行。确认归入、撤销两个按钮也放这里，
-        // 颜色 / 风格与 LIVE 一致（半透明黑底胶囊 + 白字），不再占用底部空间。
+        // 左上角动作行：和微信 LIVE 徽标同一行。信息、归入相册两个按钮也放这里，
+        // 颜色 / 风格与 LIVE 一致（半透明黑底胶囊 + 白字）；确认归入 / 撤销已移到底部工具栏。
         Row(
             Modifier
                 .align(Alignment.TopStart)
@@ -453,9 +452,9 @@ fun ViewerScreen(
                     onToggleMute = { onSetLiveMuted(!liveMuted) },
                 )
             }
-            // 「确认归入」胶囊：与 LIVE 同一行，点一下整批写盘（只弹一次权限确认）。
+            // 「信息」胶囊：与 LIVE 同款黑底风格，点开照片信息面板。
             AnimatedVisibility(
-                visible = stagedCount > 0 && chromeVisible && !infoVisible,
+                visible = chromeVisible && !infoVisible,
                 enter = fadeIn() + slideInVertically { it },
                 exit = fadeOut() + slideOutVertically { it },
             ) {
@@ -463,28 +462,21 @@ fun ViewerScreen(
                     Modifier
                         .clip(RoundedCornerShape(50))
                         .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable { onConfirmStaged() }
+                        .clickable { infoVisible = true }
                         .padding(horizontal = 11.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        Icons.Rounded.CheckCircle,
-                        contentDescription = null,
+                        Icons.Rounded.Info,
+                        contentDescription = "信息",
                         tint = Color.White,
                         modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        "确认归入 $stagedCount 张",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
-            // 「撤销」胶囊：删除后常驻显示，风格与 LIVE 一致。
+            // 「归入相册」胶囊：与 LIVE 同款风格，点开系统相册选择器。
             AnimatedVisibility(
-                visible = undoAvailable && chromeVisible && !infoVisible,
+                visible = chromeVisible && !infoVisible,
                 enter = fadeIn() + slideInVertically { it },
                 exit = fadeOut() + slideOutVertically { it },
             ) {
@@ -492,22 +484,15 @@ fun ViewerScreen(
                     Modifier
                         .clip(RoundedCornerShape(50))
                         .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable { onUndo() }
+                        .clickable { current?.let(onMoveToAlbum) }
                         .padding(horizontal = 11.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        Icons.Rounded.Undo,
-                        contentDescription = null,
+                        Icons.Rounded.Folder,
+                        contentDescription = "归入相册",
                         tint = Color.White,
                         modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        "撤销 $undoCount",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
@@ -542,11 +527,12 @@ fun ViewerScreen(
             ViewerBottomBar(
                 photo = current,
                 onFavorite = { current?.let(onToggleFavorite) },
-                onMove = { current?.let(onMoveToAlbum) },
                 onDelete = { current?.let(::trash) },
-                onInfo = { infoVisible = true },
-                onPlayLive = if (current?.isLivePhoto == true) ::toggleLive else null,
-                livePlaying = livePlaying,
+                onConfirmStaged = onConfirmStaged,
+                stagedCount = stagedCount,
+                onUndo = onUndo,
+                undoAvailable = undoAvailable,
+                undoCount = undoCount,
             )
         }
 
@@ -604,7 +590,6 @@ private fun ViewerTopBar(
     index: Int,
     total: Int,
     onClose: () -> Unit,
-    onInfo: () -> Unit,
 ) {
     Row(
         Modifier
@@ -635,9 +620,6 @@ private fun ViewerTopBar(
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
             )
-        }
-        IconButton(onClick = onInfo) {
-            Icon(Icons.Rounded.Info, "详细信息", tint = Color.White)
         }
     }
 }
@@ -894,11 +876,12 @@ private fun VideoPage(
 private fun ViewerBottomBar(
     photo: PhotoItem?,
     onFavorite: () -> Unit,
-    onMove: () -> Unit,
     onDelete: () -> Unit,
-    onInfo: () -> Unit,
-    onPlayLive: (() -> Unit)? = null,
-    livePlaying: Boolean = false,
+    onConfirmStaged: () -> Unit = {},
+    stagedCount: Int = 0,
+    onUndo: () -> Unit = {},
+    undoAvailable: Boolean = false,
+    undoCount: Int = 0,
 ) {
     Row(
         Modifier
@@ -919,14 +902,18 @@ private fun ViewerBottomBar(
             label = "收藏",
             onClick = onFavorite,
         )
-        ViewerAction(Icons.Rounded.Folder, "归入相册", onMove)
-        ViewerAction(Icons.Rounded.Info, "信息", onInfo)
-        if (onPlayLive != null) {
+        // 「确认归入」：有暂存待归入照片时才出现，与下方图标风格一致。
+        if (stagedCount > 0) {
             ViewerAction(
-                icon = if (livePlaying) Icons.Rounded.Close else Icons.Rounded.PlayArrow,
-                label = if (livePlaying) "停止" else "Live",
-                onClick = onPlayLive,
+                Icons.Rounded.CheckCircle,
+                "归入 $stagedCount",
+                onConfirmStaged,
+                tint = MaterialTheme.colorScheme.primary,
             )
+        }
+        // 「撤销」：有可撤销删除时才出现，与下方图标风格一致。
+        if (undoAvailable) {
+            ViewerAction(Icons.Rounded.Undo, "撤销 $undoCount", onUndo)
         }
         ViewerAction(Icons.Rounded.Delete, "删除", onDelete, tint = Color(0xFFFF7B7F))
     }

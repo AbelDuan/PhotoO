@@ -32,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import coil3.compose.rememberAsyncImagePainter
 import com.abel.photoo.model.GestureDirection
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -50,8 +51,9 @@ import kotlin.math.abs
  * 改成了翻页以外的动作时，外层才会关掉 Pager 滚动并把水平交给这里。
  *
  * 删除/退出的"飞出手势"统一为：拖动时图片**不透明**跟手（不再提前变淡），
- * 松手超过阈值即确认该方向手势，通知父层立刻移除/退出当前照片；未达阈值则弹簧回弹。
- * 这样普通照片、Live 静帧删除时观感一致，不会出现"半透明幽灵"或黑屏割裂。
+ * 松手超过阈值即确认该方向手势：先播一段"朝手势方向飞出淡出"的动画，动画结束后再通知
+ * 父层移除/退出当前照片，由预载好的下一张平滑接上；未达阈值则弹簧回弹。
+ * 这样普通照片、Live 静帧、视频删除时观感一致，不会出现"半透明幽灵"或硬切割裂。
  */
 @Composable
 fun ZoomableImage(
@@ -223,12 +225,17 @@ fun ZoomableImage(
                     }
                     if (dir != null) {
                         if (flyOut(dir)) {
-                            // 飞出手势确认：通知父层立刻移除/退出当前照片。
-                            // 本组件不再播自身飞出动画（exiting 保持 false），停在手指位置，
-                            // 由父层直接切到下一张/退出，干净利落、不再有"停留再消失"的割裂感。
+                            // 飞出手势确认：先播一段"整张图朝手势方向飞出淡出"的动画，
+                            // 动画结束后再通知父层移除/退出当前照片。由于 Pager 已预载下一张，
+                            // 旧图淡出的同时新图正好平滑接上，消除"先瞬删、再硬切下一张"的割裂感。
+                            // 手势确认即停在手指位置（不再弹簧回弹），飞出动画从这里自然延续。
                             exitDir = dir
                             onFlyStart(dir)
-                            onFlyConfirm(dir, Offset(dragX.value, dragY.value), null)
+                            exiting = true
+                            scope.launch {
+                                delay(240)
+                                onFlyConfirm(dir, Offset(dragX.value, dragY.value), null)
+                            }
                         } else {
                             scope.launch {
                                 dragX.animateTo(0f, spring())
