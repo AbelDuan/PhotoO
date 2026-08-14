@@ -66,6 +66,7 @@ import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -141,6 +142,10 @@ fun ViewerScreen(
     onMoveToAlbum: (PhotoItem) -> Unit,
     onResolveLiveVideo: suspend (PhotoItem) -> Uri? = { null },
     onUndo: () -> Unit = {},
+    /** 是否有可撤销的删除（删除后 FAB / 撤销胶囊出现）。 */
+    undoAvailable: Boolean = false,
+    /** 待撤销的照片张数（展示在撤销胶囊上）。 */
+    undoCount: Int = 0,
     onMarkKept: (PhotoItem) -> Unit = {},
     /** 四个方向各自绑定的动作。 */
     gestures: Map<GestureDirection, GestureAction> = emptyMap(),
@@ -430,49 +435,78 @@ fun ViewerScreen(
             )
         }
 
-        // 微信同款 LIVE 徽标：贴在画面左上角，点一下停 / 播，旁边是声音开关。
-        if (current?.isLivePhoto == true) {
-            LiveBadge(
-                playing = livePlaying,
-                muted = liveMuted,
-                onToggle = ::toggleLive,
-                onToggleMute = { onSetLiveMuted(!liveMuted) },
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(start = 14.dp, top = 62.dp),
-            )
-        }
-
-        // 「确认归入」按钮：浮在快捷归入条上方，与归入条各自独立定位、互不重叠；
-        // 归入条始终固定在底部 96dp 处，按钮出现时不会被它顶上去（不再整体上移）。
-        AnimatedVisibility(
-            visible = stagedCount > 0 && chromeVisible && !infoVisible,
-            enter = fadeIn() + slideInVertically { it },
-            exit = fadeOut() + slideOutVertically { it },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 272.dp),
+        // 左上角动作行：和微信 LIVE 徽标同一行。确认归入、撤销两个按钮也放这里，
+        // 颜色 / 风格与 LIVE 一致（半透明黑底胶囊 + 白字），不再占用底部空间。
+        Row(
+            Modifier
+                .align(Alignment.TopStart)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(start = 14.dp, top = 62.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(20.dp),
-                tonalElevation = 6.dp,
-                modifier = Modifier.clickable { onConfirmStaged() },
+            if (current?.isLivePhoto == true) {
+                LiveBadge(
+                    playing = livePlaying,
+                    muted = liveMuted,
+                    onToggle = ::toggleLive,
+                    onToggleMute = { onSetLiveMuted(!liveMuted) },
+                )
+            }
+            // 「确认归入」胶囊：与 LIVE 同一行，点一下整批写盘（只弹一次权限确认）。
+            AnimatedVisibility(
+                visible = stagedCount > 0 && chromeVisible && !infoVisible,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it },
             ) {
                 Row(
-                    Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .clickable { onConfirmStaged() }
+                        .padding(horizontal = 11.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
                         Icons.Rounded.CheckCircle,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(19.dp),
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
                     )
                     Text(
                         "确认归入 $stagedCount 张",
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            // 「撤销」胶囊：删除后常驻显示，风格与 LIVE 一致。
+            AnimatedVisibility(
+                visible = undoAvailable && chromeVisible && !infoVisible,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it },
+            ) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .clickable { onUndo() }
+                        .padding(horizontal = 11.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Rounded.Undo,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        "撤销 $undoCount",
+                        color = Color.White,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -918,7 +952,7 @@ private fun QuickAlbumBar(
         FlowRow(
             Modifier
                 .padding(8.dp)
-                .heightIn(max = 160.dp)
+                .heightIn(max = 120.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

@@ -469,6 +469,10 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         onToggleFavorite = { vm.toggleFavorite(it.id) },
                         onMoveToAlbum = { pickerTargets = listOf(it.id) },
                         onUndo = { handleUndo() },
+                        // 撤销胶囊放在大图页左上角 LIVE 行里（与 LIVE 同款风格），
+                        // 这里只负责把"是否有可撤销删除 / 张数"透传给大图页。
+                        undoAvailable = undoEvent != null,
+                        undoCount = undoEvent?.count ?: 0,
                         onResolveLiveVideo = { vm.resolveLiveVideo(it) },
                         onMarkKept = { vm.markKept(listOf(it.id)) },
                         gestures = settings.gestures,
@@ -496,17 +500,17 @@ fun PhotoORoot(vm: PhotoOViewModel) {
         }
 
         // 整理操作的悬浮撤销按钮：删除后常驻显示，直到被点击撤销或新的操作覆盖。
-        // 放在 Box 最后一层，所以大图查看器全屏时也能看到并一键找回。
+        // 仅在大图查看器【之外】显示——大图页内的撤销已移到左上角 LIVE 行（同款风格），
+        // 避免两处重复出现。
         AnimatedVisibility(
-            visible = undoEvent != null,
+            visible = undoEvent != null && viewer == null,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(
                     end = 18.dp,
-                    // 大图页底部有快捷归入条 + 操作栏，浮钮再往上提一点，避免遮挡。
-                    bottom = if (viewer != null) navBarInset + 168.dp else navBarInset + 96.dp,
+                    bottom = navBarInset + 96.dp,
                 ),
         ) {
             ExtendedFloatingActionButton(
