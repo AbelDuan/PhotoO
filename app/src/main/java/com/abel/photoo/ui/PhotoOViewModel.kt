@@ -19,9 +19,15 @@ import com.abel.photoo.model.SimilarGroup
 import com.abel.photoo.model.SimilarityLevel
 import com.abel.photoo.model.TimelineGrouping
 import com.abel.photoo.data.prefs.ThemeMode
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -89,23 +95,34 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     val exifCache: StateFlow<Map<Long, ExifInfo>> = _exifCache.asStateFlow()
 
     /**
-     * 最近一次"移入回收站"操作携带的照片 id，供界面弹出"撤销"动作恢复。
-     * 撤销只把照片从回收站放回图库（不回退相似组的已处理标记）。
+     * 最近若干次"移入回收站"操作，供界面常驻"撤销"浮钮逐个恢复（支持多次撤销）。
+     * 新删除压在栈顶，撤销时弹栈恢复最近一次；全部撤销完浮钮才消失。
      */
-    private val _undoEvent = MutableStateFlow<UndoEvent?>(null)
-    val undoEvent: StateFlow<UndoEvent?> = _undoEvent.asStateFlow()
+    private val _undoStack = MutableStateFlow<List<UndoEvent>>(emptyList())
+    val undoEvent: StateFlow<UndoEvent?> = _undoStack
+        .map { it.firstOrNull() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    /** 每次"新删除"时单向提示（只在新增时冒泡，撤销不重复提示）。 */
+    private val _undoToast = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val undoToast: SharedFlow<String> = _undoToast.asSharedFlow()
+
+    private fun pushUndo(ev: UndoEvent) {
+        _undoStack.value = listOf(ev) + _undoStack.value
+        _undoToast.tryEmit("已移入回收站 ${ev.count} 张")
+    }
 
     fun undoLastTrash() {
-        val ev = _undoEvent.value ?: return
+        val stack = _undoStack.value
+        val ev = stack.firstOrNull() ?: return
         // 先把照片同步放回内存图库（不等系统/数据库回写），撤销后大图页能立刻
         // 跳回这张照片；随后异步走正式的恢复流程，refresh 会再校准一次。
         repo.reinsertPhotos(ev.items)
-        _undoEvent.value = null
         repo.restoreFromTrash(ev.ids)
+        _undoStack.value = stack.drop(1)
     }
 
     fun clearUndoEvent() {
-        _undoEvent.value = null
+        _undoStack.value = emptyList()
     }
 
     private var permissionReady = false
@@ -208,7 +225,7 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         if (keepers.isNotEmpty()) repo.markReviewed(keepers, ReviewAction.KEPT)
         affected.forEach { repo.resolveGroup(it.key) }
         _similarPicks.value = emptySet()
-        if (ids.isNotEmpty()) _undoEvent.value = UndoEvent(ids.size, ids, items)
+        if (ids.isNotEmpty()) pushUndo(UndoEvent(ids.size, ids, items))
     }
 
     // ------------------------------------------------------------------ EXIF
@@ -229,7 +246,7 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         val items = photos.value.filter { it.id in set }
         repo.moveToTrash(set)
         _selection.value = _selection.value - set
-        if (set.isNotEmpty()) _undoEvent.value = UndoEvent(set.size, set, items)
+        if (set.isNotEmpty()) pushUndo(UndoEvent(set.size, set, items))
     }
 
     fun restore(ids: Collection<Long>) = repo.restoreFromTrash(ids)
@@ -268,6 +285,13 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 强制把归入缓冲里的待处理项立即落盘（如退出大图页时调用）。 */
     fun flushAlbumMoves() = repo.flushAlbumMoves()
+
+    // 归入"暂存 + 整体一次确认"：点相册只暂存目标（不写系统、不弹框），
+    // 退出大图页或点"确认归入"时整批一次性写盘，全程只弹一次权限确认。
+    val stagedMoves: StateFlow<Map<Long, String>> = repo.stagedMovesFlow
+    fun stageMoveToAlbumByName(name: String, ids: Collection<Long>) = repo.stageMoveToAlbumByName(name, ids)
+    fun flushStagedMoves() = repo.flushStagedMoves()
+    fun clearStaged(ids: Collection<Long>? = null) = repo.clearStaged(ids)
 
     /** 解析 Live Photo 的可播放视频 Uri（内嵌型会按需抽取并缓存）。 */
     suspend fun resolveLiveVideo(photo: PhotoItem): Uri? = repo.resolveLiveVideo(photo)

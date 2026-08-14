@@ -147,7 +147,8 @@ fun AlbumsScreen(
         }
 
         // 收藏入口：点进去看全部已收藏照片，可单独 / 批量处理（删除、归入、取消收藏等）。
-        item(key = "favorites") {
+        // 没有任何收藏时不显示，避免一个永远进不去的空入口。
+        if (favoriteCount > 0) item(key = "favorites") {
             AlbumCard(
                 name = "收藏",
                 count = favoriteCount,

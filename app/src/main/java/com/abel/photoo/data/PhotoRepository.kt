@@ -81,6 +81,15 @@ class PhotoRepository(
     private val pendingAlbumMoves = LinkedHashMap<Long, AlbumItem>()
     private var flushAlbumJob: Job? = null
 
+    /**
+     * 归入相册的"暂存"：点快捷归入 / 选相册时只记到这里（内存），不写系统、不弹权限框。
+     * 用户一路浏览把多张照片各标记到目标相册后，再一次性 [flushStagedMoves] 真正落盘，
+     * 全程只弹一次系统写权限确认 —— 杜绝"每张照片归入都弹一次确认"的割裂体验。
+     */
+    private val stagedMoves = LinkedHashMap<Long, String>() // photo id -> 目标相册名
+    private val _stagedMoves = MutableStateFlow<Map<Long, String>>(emptyMap())
+    val stagedMovesFlow: StateFlow<Map<Long, String>> = _stagedMoves.asStateFlow()
+
     private val _photos = MutableStateFlow<List<PhotoItem>>(emptyList())
     val photos: StateFlow<List<PhotoItem>> = _photos.asStateFlow()
 
@@ -633,6 +642,53 @@ class PhotoRepository(
                     }
                     refresh()
                     emit("已归档 ${result.affected} 张")
+                }
+            }
+        }
+    }
+
+    // ----------------------------------------------------- 归入：暂存 + 整体一次确认
+
+    /** 暂存：把照片标记到目标相册（仅内存），不写系统、不弹确认。可反复改、可累计多张。 */
+    fun stageMoveToAlbumByName(name: String, ids: Collection<Long>) {
+        if (ids.isEmpty() || name.isBlank()) return
+        ids.forEach { stagedMoves[it] = name.trim() }
+        _stagedMoves.value = stagedMoves.toMap()
+    }
+
+    /** 取消某些照片的暂存标记（不传 ids 则清空全部）。 */
+    fun clearStaged(ids: Collection<Long>? = null) {
+        if (ids == null) stagedMoves.clear()
+        else ids.forEach { stagedMoves.remove(it) }
+        _stagedMoves.value = stagedMoves.toMap()
+    }
+
+    /** 把全部暂存一次性真正写入系统：整批只弹一次写权限确认。 */
+    fun flushStagedMoves() {
+        if (stagedMoves.isEmpty()) return
+        val snapshot = stagedMoves.toList() // List<Pair<Long, String>>
+        stagedMoves.clear()
+        _stagedMoves.value = emptyMap()
+        scope.launch {
+            val moves = ArrayList<Pair<Uri, String>>()
+            val ids = ArrayList<Long>()
+            snapshot.forEach { (id, name) ->
+                val p = findPhoto(id) ?: return@forEach
+                // 同名相册可能对应多个 bucket，挑 DCIM 下或照片最多的那个；没有就按名字算默认路径。
+                val path = _albums.value.filter { it.name == name }
+                    .maxByOrNull { if (it.relativePath.contains("DCIM", ignoreCase = true)) Int.MAX_VALUE else it.count }
+                    ?.relativePath ?: MediaStoreSource.defaultPathFor(name)
+                moves.add(p.uri to path)
+                ids.add(id)
+            }
+            if (moves.isEmpty()) return@launch
+            when (val result = ops.applyAlbumMoves(moves)) {
+                is OpResult.Cancelled -> emit("已取消归档")
+                is OpResult.Failure -> emit(result.message)
+                is OpResult.Success -> {
+                    withContext(Dispatchers.IO) { db.markReviewed(ids, ReviewAction.MOVED) }
+                    refresh()
+                    emit("已归入 ${result.affected} 张到对应相册")
                 }
             }
         }

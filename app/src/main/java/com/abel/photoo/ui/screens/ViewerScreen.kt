@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -88,6 +90,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -150,8 +153,12 @@ fun ViewerScreen(
     allAlbums: List<String> = emptyList(),
     /** 保存用户勾选的快捷归入文件夹。 */
     onSetQuickAlbums: (List<String>) -> Unit = {},
-    /** 把当前照片直接归入指定名称的文件夹。 */
+    /** 把当前照片直接归入指定名称的文件夹（本页走"暂存"，不立即写系统、不弹确认）。 */
     onMoveToAlbumByName: (String, PhotoItem) -> Unit = { _, _ -> },
+    /** 全部已暂存（照片 id -> 目标相册名），本页据此高亮当前照片对应的快捷按钮与计数。 */
+    staged: Map<Long, String> = emptyMap(),
+    /** 一次性把全部暂存真正写入系统（只弹一次权限确认）。 */
+    onConfirmStaged: () -> Unit = {},
     /** 外部（如相册选择器完成）通知本页"某张照片已处理完，按浏览方向切走"。 */
     advanceSignal: Int = 0,
 ) {
@@ -188,6 +195,9 @@ fun ViewerScreen(
     var flying by remember { mutableStateOf<FlyingState?>(null) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
+    // 当前照片已暂存到的目标相册名（用于高亮），以及已暂存待归入的照片总数。
+    val stagedName = staged[current?.id]
+    val stagedCount = staged.size
 
     // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
     // 越界时 Pager 会渲染出一页空白（黑屏），这里主动纠正回最后一个有效页。
@@ -256,8 +266,8 @@ fun ViewerScreen(
 
     // 飞出方向已确定：先留住"飞出副本"，再立刻执行动作（删除会同步移除内存照片、
     // 退出则稍候关闭）。副本由 FlyingPhoto 渲染飞出淡出，下一张照片无缝跟上。
-    fun confirmFly(dir: GestureDirection, photo: PhotoItem, startOffset: Offset = Offset.Zero) {
-        flying = FlyingState(photo, dir, startOffset.x, startOffset.y)
+    fun confirmFly(dir: GestureDirection, photo: PhotoItem, startOffset: Offset = Offset.Zero, painter: Painter? = null) {
+        flying = FlyingState(photo, dir, startOffset.x, startOffset.y, painter)
         when (actionOf(dir)) {
             GestureAction.TRASH -> trash(photo)
             GestureAction.CLOSE -> scope.launch { kotlinx.coroutines.delay(220); onClose() }
@@ -389,7 +399,7 @@ fun ViewerScreen(
                     // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
                     // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
                     onFlyStart = { livePlaying = false },
-                    onFlyConfirm = { dir, off -> confirmFly(dir, photo, off) },
+                    onFlyConfirm = { dir, off, painter -> confirmFly(dir, photo, off, painter) },
                     onZoomChanged = { if (isCurrent) zoomed = it },
                     overlay = if (isCurrent && livePlaying && liveUri != null) {
                         {
@@ -449,6 +459,7 @@ fun ViewerScreen(
         ) {
             QuickAlbumBar(
                 albums = quickAlbums,
+                stagedName = stagedName,
                 onPick = { name ->
                     current?.let {
                         onMoveToAlbumByName(name, it)
@@ -458,6 +469,41 @@ fun ViewerScreen(
                 },
                 onEdit = { showQuickPicker = true },
             )
+
+            // 已标记若干照片待归入时，常驻一个"确认归入"按钮：点一下整批一次性写盘，
+            // 全程只弹一次系统权限确认。看照片过程中可一路标记，最后统一确认。
+            AnimatedVisibility(
+                visible = stagedCount > 0 && chromeVisible && !infoVisible,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.clickable { onConfirmStaged() },
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(19.dp),
+                        )
+                        Text(
+                            "确认归入 $stagedCount 张",
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -508,6 +554,8 @@ private data class FlyingState(
     /** 手指松手瞬间图片的位移，飞出从这里起步，避免"先回弹到中心再飞"的跳变。 */
     val startX: Float,
     val startY: Float,
+    /** 已解码好的主图画笔：直接复用画图，避免重新加载造成的闪白 / 卡顿。 */
+    val painter: Painter? = null,
 )
 
 /**
@@ -541,19 +589,30 @@ private fun FlyingPhoto(state: FlyingState, onDone: () -> Unit) {
             }
             onDone()
         }
-        AsyncImage(
-            model = state.photo.thumbUri ?: state.photo.uri,
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    translationX = if (horizontal) main.value else state.startX
-                    translationY = if (horizontal) state.startY else main.value
-                    alpha = flyAlpha.value
-                    rotationZ = rot.value
-                },
-        )
+        val flyModifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                translationX = if (horizontal) main.value else state.startX
+                translationY = if (horizontal) state.startY else main.value
+                alpha = flyAlpha.value
+                rotationZ = rot.value
+            }
+        if (state.painter != null) {
+            // 复用当前照片已经解码好的画笔，避免副本重新加载导致的闪白 / 卡顿 —— 飞出才连贯自然。
+            Image(
+                painter = state.painter,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = flyModifier,
+            )
+        } else {
+            AsyncImage(
+                model = state.photo.thumbUri ?: state.photo.uri,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = flyModifier,
+            )
+        }
     }
 }
 
@@ -922,6 +981,7 @@ private fun ViewerBottomBar(
 @Composable
 private fun QuickAlbumBar(
     albums: List<String>,
+    stagedName: String? = null,
     onPick: (String) -> Unit,
     onEdit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -943,7 +1003,12 @@ private fun QuickAlbumBar(
                 QuickChip("＋ 添加快捷归入", leadingIcon = Icons.Rounded.Add, onClick = onEdit)
             } else {
                 albums.forEach { name ->
-                    QuickChip(name, onClick = { onPick(name) })
+                    QuickChip(
+                        name,
+                        onClick = { onPick(name) },
+                        // 已标记到该相册时高亮，提示"这张照片待会儿会归入这里"。
+                        highlighted = name == stagedName,
+                    )
                 }
                 QuickChip("编辑", leadingIcon = Icons.Rounded.Add, onClick = onEdit)
             }
@@ -957,22 +1022,25 @@ private fun QuickChip(
     text: String,
     onClick: () -> Unit,
     leadingIcon: ImageVector? = null,
+    highlighted: Boolean = false,
 ) {
+    val bg = if (highlighted) MaterialTheme.colorScheme.primary else Color.White
+    val content = if (highlighted) MaterialTheme.colorScheme.onPrimary else Color.White
     Row(
         Modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.16f))
+            .background(bg.copy(alpha = if (highlighted) 1f else 0.16f))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         leadingIcon?.let {
-            Icon(it, null, tint = Color.White, modifier = Modifier.size(15.dp))
+            Icon(it, null, tint = content, modifier = Modifier.size(15.dp))
         }
         Text(
             text,
-            color = Color.White,
+            color = content,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
         )

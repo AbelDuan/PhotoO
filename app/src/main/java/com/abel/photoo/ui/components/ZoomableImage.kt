@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,10 +25,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
+import coil3.compose.rememberAsyncImagePainter
 import com.abel.photoo.model.GestureDirection
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -71,8 +74,9 @@ fun ZoomableImage(
     onFlyStart: (GestureDirection) -> Unit = {},
     /** 飞出方向已确定、动画刚开始时回调：父层据此立刻移除/退出当前照片，
      *  由父层负责渲染"飞出"副本，这样下一张照片能无缝跟上、不再等动画播完。
-     *  第二个参数为手指松手瞬间图片的位移，飞出副本从同一位置起步，避免回弹跳变。 */
-    onFlyConfirm: (GestureDirection, Offset) -> Unit = { _, _ -> },
+     *  第二个参数为手指松手瞬间图片的位移，飞出副本从同一位置起步，避免回弹跳变；
+     *  第三个参数是已经解码好的图片画笔，副本直接复用它画图，避免重新加载造成的闪白/卡顿。 */
+    onFlyConfirm: (GestureDirection, Offset, Painter?) -> Unit = { _, _, _ -> },
     /**
      * 盖在图片之上的内容（Live Photo 视频层）。
      *
@@ -89,6 +93,8 @@ fun ZoomableImage(
     val dragY = remember { Animatable(0f) }
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
+    // 已经解码好的主图画笔：飞出副本直接复用它画图，避免重新加载造成闪白/卡顿。
+    var capturedPainter by remember { mutableStateOf<Painter?>(null) }
     val scope = rememberCoroutineScope()
 
     // 翻页之后必须复位，否则下一张会继承上一张的缩放状态。
@@ -226,7 +232,7 @@ fun ZoomableImage(
                             // 因此不再有"先回弹到中心再飞出去"的卡顿跳变。
                             exitDir = dir
                             onFlyStart(dir)
-                            onFlyConfirm(dir, Offset(dragX.value, dragY.value))
+                            onFlyConfirm(dir, Offset(dragX.value, dragY.value), capturedPainter)
                         } else {
                             scope.launch {
                                 dragX.animateTo(0f, spring())
@@ -276,8 +282,10 @@ fun ZoomableImage(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            AsyncImage(
-                model = model,
+            val mainPainter = rememberAsyncImagePainter(model = model)
+            capturedPainter = mainPainter
+            Image(
+                painter = mainPainter,
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),

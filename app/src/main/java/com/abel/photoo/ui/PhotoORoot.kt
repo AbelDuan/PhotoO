@@ -159,6 +159,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     val liveMuted by vm.liveMuted.collectAsStateWithLifecycle()
     val similarGroups by vm.similarGroups.collectAsStateWithLifecycle()
     val undoEvent by vm.undoEvent.collectAsStateWithLifecycle()
+    val staged by vm.stagedMoves.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TIMELINE) }
     var albumDetail by remember { mutableStateOf<AlbumItem?>(null) }
@@ -187,10 +188,9 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     // 删除后弹一条轻提示；撤销交给右下角悬浮按钮（FAB 常驻显示直到被消费），
     // 这里不再带"撤销"动作，避免和 FAB 重复。
     LaunchedEffect(Unit) {
-        vm.undoEvent.collect { ev ->
-            if (ev == null) return@collect
+        vm.undoToast.collect { text ->
             snackbar.currentSnackbarData?.dismiss()
-            snackbar.showSnackbar("已移入回收站 ${ev.count} 张")
+            snackbar.showSnackbar(text)
         }
     }
 
@@ -225,7 +225,10 @@ fun PhotoORoot(vm: PhotoOViewModel) {
         AlbumPickerHost(
             vm, albums, pickerTargets, { creatingAlbum = true },
             onDismiss = { pickerTargets = null },
-            onAfterPick = { if (viewer != null) advanceSignal++ },
+            onAfterPick = {
+                if (viewer != null) advanceSignal++
+                else vm.flushStagedMoves()
+            },
         )
         NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
         return
@@ -461,7 +464,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         initialId = request.initialId,
                         exif = exif,
                         onRequestExif = vm::loadExif,
-                        onClose = { vm.flushAlbumMoves(); viewer = null },
+                        onClose = { vm.flushStagedMoves(); vm.flushAlbumMoves(); viewer = null },
                         onTrash = { vm.moveToTrash(listOf(it.id)) },
                         onToggleFavorite = { vm.toggleFavorite(it.id) },
                         onMoveToAlbum = { pickerTargets = listOf(it.id) },
@@ -475,15 +478,17 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         liveAutoPlay = true,
                         liveMuted = liveMuted,
                         onSetLiveMuted = vm::setLiveMuted,
-                        // 大图底部「快捷归入」：用户自选的文件夹名，点一下即归档当前照片
+                        // 大图底部「快捷归入」：用户自选的文件夹名，点一下即把当前照片
+                        // "暂存"到该相册（仅内存、不写系统、不弹确认），可一路标记多张，
+                        // 最后点"确认归入"或退出大图页时整批一次性写盘，全程只弹一次权限确认。
                         quickAlbums = settings.quickAlbums,
                         allAlbums = albums.map { it.name }.distinct(),
                         onSetQuickAlbums = vm::setQuickAlbums,
-                        // 快捷归入走"合并队列"：停手后一次性落盘，整批只弹一次权限确认；
-                        // 处理后按浏览方向切到下一张/上一张（proceedAfterAction）。
                         onMoveToAlbumByName = { name, photo ->
-                            vm.queueMoveToAlbumByName(name, listOf(photo.id))
+                            vm.stageMoveToAlbumByName(name, listOf(photo.id))
                         },
+                        staged = staged,
+                        onConfirmStaged = { vm.flushStagedMoves() },
                         advanceSignal = advanceSignal,
                     )
                 }
@@ -521,6 +526,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
     AlbumPickerHost(
         vm, albums, pickerTargets, { creatingAlbum = true },
         onDismiss = { pickerTargets = null },
+        // 查看器外（批量 / 整理）选完相册即整体落盘：一次操作只弹一次权限确认。
+        onAfterPick = { if (viewer == null) vm.flushStagedMoves() },
     )
 
     NewAlbumDialogHost(vm, creatingAlbum) { creatingAlbum = false }
@@ -557,7 +564,9 @@ private fun AlbumPickerHost(
         albums = albums,
         photoCount = targets.size,
         onPick = { album ->
-            vm.moveToAlbum(targets, album)
+            // 只"暂存"目标相册（不写系统、不弹确认）；在查看器内会继续累积，
+            // 在查看器外（批量 / 整理）则选完立即整体落盘 —— 一次操作只弹一次权限确认。
+            vm.stageMoveToAlbumByName(album.name, targets)
             vm.clearSimilarPicks()
             onAfterPick()
             onDismiss()
