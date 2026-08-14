@@ -43,6 +43,14 @@ class MediaStoreSource(private val context: Context) {
     )
 
     /** 读取全部图片。已被系统回收站隐藏的项默认不会返回。 */
+    /**
+     * 相册归属用的稳定 id：按"文件夹相对路径"算，而不是 MediaStore 的 BUCKET_ID。
+     * 同一目录下的图片和视频在 MediaStore 里经常拿到不同的 BUCKET_ID，
+     * 导致视频被分到平行相册、在主相册里看不到。用文件夹路径做 key 让图文归入同一相册。
+     */
+    private fun folderKey(relative: String): Long =
+        normalizePath(relative).hashCode().toLong().and(0x7FFFFFFF)
+
     fun queryPhotos(): List<PhotoItem> {
         // 一次性把 Live Photo 视频预先查好，避免在每行循环里再发查询。
         // 缩略图不再依赖 Thumbnails 表（API 30+ 该表大多为空），改由网格层用
@@ -57,7 +65,6 @@ class MediaStoreSource(private val context: Context) {
         cursor.use { c ->
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val bucketIdIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
             val bucketNameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
             val takenIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
             val modifiedIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
@@ -74,7 +81,7 @@ class MediaStoreSource(private val context: Context) {
                     val modifiedMs = (c.getLongOrNull(modifiedIdx) ?: 0L) * 1000L
                     val takenMs = c.getLongOrNull(takenIdx)?.takeIf { it > 0L } ?: modifiedMs
                     val relative = c.getStringOrNull(pathIdx).orEmpty()
-                    val bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong()
+                    val bucketId = folderKey(relative)
                     val bucketName = c.getStringOrNull(bucketNameIdx)
                         ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
                     val fullUri = ContentUris.withAppendedId(collection, id)
@@ -181,7 +188,6 @@ class MediaStoreSource(private val context: Context) {
         }.getOrNull()?.use { c ->
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val bucketIdIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_ID)
             val bucketNameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
             val takenIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
             val modifiedIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)
@@ -198,7 +204,7 @@ class MediaStoreSource(private val context: Context) {
                     val modifiedMs = (c.getLongOrNull(modifiedIdx) ?: 0L) * 1000L
                     val takenMs = c.getLongOrNull(takenIdx)?.takeIf { it > 0L } ?: modifiedMs
                     val relative = c.getStringOrNull(pathIdx).orEmpty()
-                    val bucketId = c.getLongOrNull(bucketIdIdx) ?: relative.hashCode().toLong()
+                    val bucketId = folderKey(relative)
                     val bucketName = c.getStringOrNull(bucketNameIdx)
                         ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
                     val fullUri = ContentUris.withAppendedId(uri, id)

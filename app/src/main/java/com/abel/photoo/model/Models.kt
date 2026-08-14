@@ -163,6 +163,8 @@ data class LibraryStats(
     val reviewed: Int = 0,
     val trashed: Int = 0,
     val albums: Int = 0,
+    /** 视频数量（含普通视频与 Live Photo 的内嵌视频）。用于确认设备是否授予了视频读取权限。 */
+    val videoCount: Int = 0,
 ) {
     val pending: Int get() = (total - reviewed).coerceAtLeast(0)
     val progress: Float get() = if (total == 0) 1f else reviewed.toFloat() / total.toFloat()

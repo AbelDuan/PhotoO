@@ -150,6 +150,7 @@ class PhotoRepository(
             val videos = withContext(Dispatchers.IO) { source.queryVideos() }
             // 图片与视频合并进同一份图库快照，统一管理；按时间倒序铺开。
             val raw = (images + videos).sortedByDescending { it.dateTaken }
+            Log.d("PhotoO", "媒体扫描完成：图片 ${images.size} 张，视频 ${videos.size} 个")
             val states = withContext(Dispatchers.IO) { db.loadAllStates() }
             val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
             val customAlbums = withContext(Dispatchers.IO) { db.listCustomAlbums() }
@@ -222,6 +223,7 @@ class PhotoRepository(
                 reviewed = visible.count { it.reviewed },
                 trashed = _trash.value.size,
                 albums = _albums.value.size,
+                videoCount = visible.count { it.isVideo },
             )
 
             // 图库变化后用已持久化的哈希重建相似分组。哈希存在本地 photo_hash 表，
@@ -405,6 +407,7 @@ class PhotoRepository(
             reviewed = visible.count { it.reviewed },
             trashed = trashRows.size,
             albums = _albums.value.size,
+            videoCount = visible.count { it.isVideo },
         )
     }
 

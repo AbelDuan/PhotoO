@@ -169,7 +169,7 @@ private fun StatsCard(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "张照片 · ${stats.albums} 个相册",
+                    "张照片 · ${stats.albums} 个相册 · 视频 ${stats.videoCount}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
