@@ -70,8 +70,9 @@ fun ZoomableImage(
     /** 飞出动画刚开始时回调（在延时真正处理之前），用于立刻停掉 Live 等副作用。 */
     onFlyStart: (GestureDirection) -> Unit = {},
     /** 飞出方向已确定、动画刚开始时回调：父层据此立刻移除/退出当前照片，
-     *  由父层负责渲染"飞出"副本，这样下一张照片能无缝跟上、不再等动画播完。 */
-    onFlyConfirm: (GestureDirection) -> Unit = {},
+     *  由父层负责渲染"飞出"副本，这样下一张照片能无缝跟上、不再等动画播完。
+     *  第二个参数为手指松手瞬间图片的位移，飞出副本从同一位置起步，避免回弹跳变。 */
+    onFlyConfirm: (GestureDirection, Offset) -> Unit = { _, _ -> },
     /**
      * 盖在图片之上的内容（Live Photo 视频层）。
      *
@@ -219,12 +220,13 @@ fun ZoomableImage(
                     if (dir != null) {
                         if (flyOut(dir)) {
                             // 飞出动画刚开始就通知父层：父层立刻移除/退出当前照片，
-                            // 并负责渲染"飞出"副本（见 ViewerScreen 的 FlyingPhoto），
-                            // 因此下一张照片能无缝跟上，不用等本组件把动画播完。
+                            // 并负责渲染"飞出"副本（见 ViewerScreen 的 FlyingPhoto）。
+                            // 本组件不再播自身的飞出动画（exiting 保持 false），
+                            // 停在原位把位置交给 FlyingPhoto 从同一手指位移无缝接手，
+                            // 因此不再有"先回弹到中心再飞出去"的卡顿跳变。
                             exitDir = dir
-                            exiting = true
                             onFlyStart(dir)
-                            onFlyConfirm(dir)
+                            onFlyConfirm(dir, Offset(dragX.value, dragY.value))
                         } else {
                             scope.launch {
                                 dragX.animateTo(0f, spring())

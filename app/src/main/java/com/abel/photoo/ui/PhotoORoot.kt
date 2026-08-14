@@ -306,6 +306,7 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     contentPadding = inner,
                     onOpenAlbum = { albumDetail = it },
                     favoriteCount = photos.count { it.favorite },
+                    favoriteCoverUri = photos.firstOrNull { it.favorite }?.let { p -> p.thumbUri ?: p.uri },
                     onOpenFavorites = {
                         val favs = photos.filter { it.favorite }
                         if (favs.isNotEmpty()) {

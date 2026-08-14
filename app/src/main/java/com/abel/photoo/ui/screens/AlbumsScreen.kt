@@ -65,6 +65,8 @@ fun AlbumsScreen(
     onOpenAlbum: (AlbumItem) -> Unit,
     /** 收藏照片数量（用于"收藏"入口的计数）。 */
     favoriteCount: Int = 0,
+    /** 收藏入口的封面（首张收藏照片的缩略图），没有收藏时传 null。 */
+    favoriteCoverUri: android.net.Uri? = null,
     /** 打开"收藏"列表，单独 / 批量处理收藏的照片。 */
     onOpenFavorites: () -> Unit = {},
 ) {
@@ -149,7 +151,7 @@ fun AlbumsScreen(
             AlbumCard(
                 name = "收藏",
                 count = favoriteCount,
-                coverUri = null,
+                coverUri = favoriteCoverUri,
                 pending = false,
                 latestDate = 0L,
                 onClick = onOpenFavorites,

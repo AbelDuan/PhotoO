@@ -83,6 +83,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -199,6 +200,21 @@ fun ViewerScreen(
     // 单击隐藏工具栏时同步隐藏系统状态栏/导航栏，再点一下恢复。
     LaunchedEffect(chromeVisible) { setSystemBarsVisible(view, chromeVisible) }
 
+    // 真实翻页方向跟踪：手指左右滑动（或程序化切页）都会改 currentPage，
+    // 据此刷新 lastNavDir，供"处理后切走 / 删除停留"判定使用。
+    // 默认左右滑动由 Pager 原生处理、runAction 的 NEXT/PREV 分支并不会被走到，
+    // 所以必须在 currentPage 变化处统一跟踪，否则 lastNavDir 永远是初始值，
+    // 操作后只会单向往后（下一张），不会逆序往前（上一张）。
+    LaunchedEffect(pagerState) {
+        var prev = pagerState.currentPage
+        snapshotFlow { pagerState.currentPage }.collect { page ->
+            val d = page - prev
+            if (d > 0) lastNavDir = GestureDirection.LEFT // 往后浏览：下一张
+            else if (d < 0) lastNavDir = GestureDirection.RIGHT // 往前浏览：上一张
+            prev = page
+        }
+    }
+
     // 删完照片后，按最近翻页方向落到目标页：往回看则停在上一张，否则停在下一张。
     LaunchedEffect(photos.size) {
         pendingDeleteTarget?.let { target ->
@@ -240,8 +256,8 @@ fun ViewerScreen(
 
     // 飞出方向已确定：先留住"飞出副本"，再立刻执行动作（删除会同步移除内存照片、
     // 退出则稍候关闭）。副本由 FlyingPhoto 渲染飞出淡出，下一张照片无缝跟上。
-    fun confirmFly(dir: GestureDirection, photo: PhotoItem) {
-        flying = FlyingState(photo, dir)
+    fun confirmFly(dir: GestureDirection, photo: PhotoItem, startOffset: Offset = Offset.Zero) {
+        flying = FlyingState(photo, dir, startOffset.x, startOffset.y)
         when (actionOf(dir)) {
             GestureAction.TRASH -> trash(photo)
             GestureAction.CLOSE -> scope.launch { kotlinx.coroutines.delay(220); onClose() }
@@ -373,7 +389,7 @@ fun ViewerScreen(
                     // 飞出动画一开始（真正删除前）就停掉 Live，避免删除过程中视频还在播、
                     // 半透明静帧跟着手势划上去的割裂观感，保证所有照片删除动画一致。
                     onFlyStart = { livePlaying = false },
-                    onFlyConfirm = { confirmFly(it, photo) },
+                    onFlyConfirm = { dir, off -> confirmFly(dir, photo, off) },
                     onZoomChanged = { if (isCurrent) zoomed = it },
                     overlay = if (isCurrent && livePlaying && liveUri != null) {
                         {
@@ -486,29 +502,40 @@ fun ViewerScreen(
 }
 
 /** 飞出副本：删除 / 退出时盖在上面的照片，朝手势方向飞出并淡出。 */
-private data class FlyingState(val photo: PhotoItem, val dir: GestureDirection)
+private data class FlyingState(
+    val photo: PhotoItem,
+    val dir: GestureDirection,
+    /** 手指松手瞬间图片的位移，飞出从这里起步，避免"先回弹到中心再飞"的跳变。 */
+    val startX: Float,
+    val startY: Float,
+)
 
 /**
  * 删除 / 退出"飞出"动画的副本层。
  *
  * 当前照片已被父层同步移除（内存图库瞬间更新），所以这一层只负责把被删/退出的那张
- * 按屏高比例朝手势方向飞出 + 轻微旋转 + 淡出，飞完 [onDone] 即清掉。
- * 下一张照片在它下面无缝跟上，整体不再有"等动画播完才换图"的延迟感。
+ * 从手指松手时的位置朝手势方向飞出 + 轻微旋转 + 淡出，飞完 [onDone] 即清掉。
+ * 起点继承 ZoomableImage 离手瞬间的位移，整张图平滑接续飞出、不再回弹到中心，
+ * 下一张照片在它下面无缝跟上，整体不再有"先卡一下再换图"的割裂感。
  */
 @Composable
 private fun FlyingPhoto(state: FlyingState, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val off = remember { Animatable(0f) }
-    val flyAlpha = remember { Animatable(1f) }
-    val rot = remember { Animatable(0f) }
-    // 竖向手势：上滑删除(UP=-1)向上飞、下滑退出(DOWN=+1)向下飞。
-    val sign = if (state.dir == GestureDirection.UP) -1f else 1f
+    val horizontal = state.dir == GestureDirection.LEFT || state.dir == GestureDirection.RIGHT
+    val sign = if (state.dir == GestureDirection.UP || state.dir == GestureDirection.LEFT) -1f else 1f
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val h = with(LocalDensity.current) { maxHeight.toPx() }
+        val w = with(LocalDensity.current) { maxWidth.toPx() }
+        // 主轴（飞出方向）从手指位置起步，副轴（垂直方向）固定在手指位移处。
+        val main = remember { Animatable(if (horizontal) state.startX else state.startY) }
+        val flyAlpha = remember { Animatable(1f) }
+        val rot = remember { Animatable(0f) }
         LaunchedEffect(Unit) {
             // 三段动画并行跑完（都是 220ms）后再清掉副本层，飞出过程才完整可见。
+            val start = if (horizontal) state.startX else state.startY
+            val travel = if (horizontal) w else h
             kotlinx.coroutines.coroutineScope {
-                launch { off.animateTo(sign * h * 1.3f, tween(220, easing = FastOutLinearInEasing)) }
+                launch { main.animateTo(start + sign * travel * 1.3f, tween(220, easing = FastOutLinearInEasing)) }
                 launch { flyAlpha.animateTo(0f, tween(220, easing = FastOutLinearInEasing)) }
                 launch { rot.animateTo(sign * 10f, tween(220, easing = FastOutLinearInEasing)) }
             }
@@ -521,7 +548,8 @@ private fun FlyingPhoto(state: FlyingState, onDone: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationY = off.value
+                    translationX = if (horizontal) main.value else state.startX
+                    translationY = if (horizontal) state.startY else main.value
                     alpha = flyAlpha.value
                     rotationZ = rot.value
                 },
