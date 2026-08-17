@@ -205,6 +205,10 @@ fun ViewerScreen(
     val memberAlbums = current?.bucketId?.let { cid ->
         quickAlbums.filter { quickAlbumBucketIds[it] == cid }.toSet()
     } ?: emptySet()
+    // 点过"归入"的相册：用户在大图底部点选了某个快捷文件夹（即使还没确认写盘）也立即高亮，
+    // 作为"这张照片要送去这里"的即时反馈。与上方"真实所在相册"取并集，两者都亮。
+    val stagedTarget = current?.let { staged[it.id] }?.let { setOf(it) } ?: emptySet()
+    val highlightedAlbums = memberAlbums + stagedTarget
     val stagedCount = staged.size
 
     // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
@@ -480,7 +484,7 @@ fun ViewerScreen(
         ) {
             QuickAlbumBar(
                 albums = quickAlbums,
-                highlightedAlbums = memberAlbums,
+                highlightedAlbums = highlightedAlbums,
                 onPick = { name ->
                     current?.let {
                         onMoveToAlbumByName(name, it)
@@ -928,7 +932,7 @@ private fun QuickAlbumBar(
                     QuickChip(
                         name,
                         onClick = { onPick(name) },
-                        // 当前照片实际位于该相册时高亮，提示"这张照片就在这个文件夹里"。
+                        // 照片真实所在相册、或用户刚点选归入的相册（即使未确认）都会高亮。
                         highlighted = name in highlightedAlbums,
                     )
                 }
