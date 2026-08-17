@@ -155,6 +155,8 @@ fun ViewerScreen(
     onSetLiveMuted: (Boolean) -> Unit = {},
     /** 大图底部快捷归入：用户自选的文件夹名（按出现顺序）。 */
     quickAlbums: List<String> = emptyList(),
+    /** 快捷归入文件夹名 -> 其 bucketId（文件夹路径哈希），用于按"照片真实所在文件夹"高亮。 */
+    quickAlbumBucketIds: Map<String, Long> = emptyMap(),
     /** 全部可选文件夹名（用于「编辑快捷归入」面板）。 */
     allAlbums: List<String> = emptyList(),
     /** 保存用户勾选的快捷归入文件夹。 */
@@ -198,9 +200,11 @@ fun ViewerScreen(
     var showQuickPicker by remember { mutableStateOf(false) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
-    // 只高亮"当前这张照片"已归入的相册：切到别的照片时高亮随之变化，
-    // 不再像之前那样所有被标记过的相册全局常亮。
-    val stagedAlbums = current?.let { staged[it.id]?.let { setOf(it) } } ?: emptySet()
+    // 高亮"当前照片实际所在的相册"：按文件夹(bucketId)匹配下方快捷归入列表里的同名文件夹，
+    // 照片不在任何快捷相册里时不高亮；切到不同照片即按各自所在文件夹变化，不会跨照片常亮。
+    val memberAlbums = current?.bucketId?.let { cid ->
+        quickAlbums.filter { quickAlbumBucketIds[it] == cid }.toSet()
+    } ?: emptySet()
     val stagedCount = staged.size
 
     // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
@@ -476,7 +480,7 @@ fun ViewerScreen(
         ) {
             QuickAlbumBar(
                 albums = quickAlbums,
-                stagedAlbums = stagedAlbums,
+                highlightedAlbums = memberAlbums,
                 onPick = { name ->
                     current?.let {
                         onMoveToAlbumByName(name, it)
@@ -899,7 +903,7 @@ private fun ViewerBottomBar(
 @Composable
 private fun QuickAlbumBar(
     albums: List<String>,
-    stagedAlbums: Set<String> = emptySet(),
+    highlightedAlbums: Set<String> = emptySet(),
     onPick: (String) -> Unit,
     onEdit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -924,8 +928,8 @@ private fun QuickAlbumBar(
                     QuickChip(
                         name,
                         onClick = { onPick(name) },
-                        // 只要有照片被标记归入该相册就高亮，提示"这些照片待会儿会归入这里"。
-                        highlighted = name in stagedAlbums,
+                        // 当前照片实际位于该相册时高亮，提示"这张照片就在这个文件夹里"。
+                        highlighted = name in highlightedAlbums,
                     )
                 }
                 QuickChip("编辑", leadingIcon = Icons.Rounded.Add, onClick = onEdit)

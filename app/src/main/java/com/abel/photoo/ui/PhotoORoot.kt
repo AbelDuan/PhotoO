@@ -495,6 +495,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         // "暂存"到该相册（仅内存、不写系统、不弹确认），可一路标记多张，
                         // 最后点"确认归入"或退出大图页时整批一次性写盘，全程只弹一次权限确认。
                         quickAlbums = settings.quickAlbums,
+                        // 文件夹名 -> 其 bucketId（文件夹路径哈希），供大图页按"照片真实所在文件夹"高亮。
+                        quickAlbumBucketIds = albums.associate { it.name to it.bucketId },
                         allAlbums = albums.map { it.name }.distinct(),
                         onSetQuickAlbums = vm::setQuickAlbums,
                         onMoveToAlbumByName = { name, photo ->
