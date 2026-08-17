@@ -14,8 +14,8 @@ android {
         applicationId = "com.abel.photoo"
         minSdk = 30
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "1.1.1"
 
         vectorDrawables {
             useSupportLibrary = true

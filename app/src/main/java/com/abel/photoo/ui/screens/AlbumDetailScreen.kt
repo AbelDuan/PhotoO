@@ -94,8 +94,10 @@ fun AlbumDetailScreen(
                 .pointerInput(Unit) {
                     detectDragSelect(
                         state = dragSelect,
-                        onPickStart = { id -> if (vm.selection.value.isEmpty()) vm.addSelection(listOf(id)) },
-                        onPickOver = { vm.addSelection(listOf(it)) },
+                        isSelected = { id -> vm.selection.value.contains(id) },
+                        onPick = { id, sel ->
+                            if (sel) vm.addSelection(listOf(id)) else vm.removeSelection(listOf(id))
+                        },
                     )
                 },
         ) {

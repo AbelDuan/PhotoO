@@ -71,35 +71,61 @@ fun rememberDragSelectState(): DragSelectState = remember { DragSelectState() }
 
 /**
  * 命中检测：返回离 pos 最近、且中心距不超过所在格边长 60% 的缩略图 id。
- * 用"最近中心距离"而不是"点是否落在矩形内"，滚动回收后残留的旧 bounds
- * 在屏外距离远，不会误中。
+ * 用于"长按落点"确定锚点；用最近中心距离而不是点是否落在矩形内，
+ * 滚动回收后残留的旧 bounds 在屏外距离远，不会误中。
  */
 private fun hitTest(bounds: Map<Long, Rect>, pos: Offset): Long? {
     var best: Pair<Long, Float>? = null
     for ((id, r) in bounds) {
         if (r.isEmpty) continue
-        val rad = minOf(r.width, r.height) * 0.6f
+        val rad = (if (r.width < r.height) r.width else r.height) * 0.6f
         val d = hypot(pos.x - r.center.x, pos.y - r.center.y)
         if (d <= rad && (best == null || d < best.second)) best = id to d
     }
     return best?.first
 }
 
+/** 线段 (a,b) 与线段 (c,d) 是否相交（用于判断拖动轨迹是否扫过某张缩略图）。 */
+private fun segSeg(a: Offset, b: Offset, c: Offset, d: Offset): Boolean {
+    fun cross(o: Offset, p: Offset, q: Offset) =
+        (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x)
+    val d1 = cross(c, d, a)
+    val d2 = cross(c, d, b)
+    val d3 = cross(a, b, c)
+    val d4 = cross(a, b, d)
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+
+/** 线段 (a,b) 是否穿过矩形 r（任一端点在内部，或与其任一边相交）。 */
+private fun segIntersectsRect(a: Offset, b: Offset, r: Rect): Boolean {
+    if (r.contains(a) || r.contains(b)) return true
+    val corners = listOf(
+        Offset(r.left, r.top), Offset(r.right, r.top),
+        Offset(r.right, r.bottom), Offset(r.left, r.bottom),
+    )
+    for (i in 0..3) {
+        if (segSeg(a, b, corners[i], corners[(i + 1) % 4])) return true
+    }
+    return false
+}
+
 /**
  * 长按后拖动即连续选择的手势检测器，挂在网格外层容器上。
  *
- * 关键点：普通滚动（长按前手指已动）会被 LazyVerticalGrid 自己消费，这里直接放弃；
- * 长按成立后，后续移动事件在 [PointerEventPass.Initial] 阶段主动 consume，
- * 阻止网格滚动抢手势 —— 这时手指划到哪张，哪张就被追加选中。
+ * 采用类似 iOS 照片 / 微信的"锚点"逻辑：长按落点（锚点）决定本轮的目标态——
+ * 锚点当时未选中 → 本轮一律"选中"；锚点当时已选中 → 本轮一律"取消选中"。
+ * 因此从已选区域起手滑动即可批量取消，从空白起手滑动即可批量选中。
  *
- * @param onPickStart 长按落点命中：若尚未进入多选，选中该张以进入多选；
- *        已在多选时不做动作（起点交给 item 自己的长按 toggle，避免误取消）。
- * @param onPickOver  拖动经过：只追加选中。
+ * 命中检测基于"手指掠过的轨迹线段"与每张缩略图矩形求交，即使快速拖动也不会漏掉中间的格子。
+ *
+ * @param isSelected 查询某 id 当前是否选中。
+ * @param onPick     将某 id 设为选中(true)/取消选中(false)。
  */
 suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectDragSelect(
     state: DragSelectState,
-    onPickStart: (Long) -> Unit,
-    onPickOver: (Long) -> Unit,
+    isSelected: (Long) -> Boolean,
+    onPick: (Long, Boolean) -> Unit,
 ) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
@@ -108,12 +134,22 @@ suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectDragSelect
         val longPress = awaitLongPressOrCancellation(down.id)
         if (longPress == null) return@awaitEachGesture
         state.active = true
-        hitTest(state.bounds, start + state.containerTopLeft)?.let(onPickStart)
+        val startId = hitTest(state.bounds, start + state.containerTopLeft)
+        val target = startId?.let { !isSelected(it) }
+        if (startId != null) onPick(startId, target!!)
+        var last = start + state.containerTopLeft
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
             val change = event.changes.firstOrNull { it.id == down.id } ?: break
             if (!change.pressed) break
-            hitTest(state.bounds, change.position + state.containerTopLeft)?.let(onPickOver)
+            val cur = change.position + state.containerTopLeft
+            // 对"上一位置→当前位置"这条轨迹扫过的每一张缩略图，统一设为目标态。
+            if (startId != null) {
+                for ((id, r) in state.bounds) {
+                    if (!r.isEmpty && segIntersectsRect(last, cur, r)) onPick(id, target!!)
+                }
+            }
+            last = cur
             change.consume()
         }
         state.active = false
@@ -317,9 +353,11 @@ fun LazyGridScope.timelineSections(
                     onLongClick = { onPhotoLongClick(photo) },
                 )
             }
-            if (dragSelect != null && selectionMode) {
-                // 仅在选择模式下才上报每张缩略图的屏幕包围盒（拖选命中检测用），
-                // 普通浏览/滚动时不包这层，避免每帧大量 onGloballyPositioned 回调拖慢列表。
+            if (dragSelect != null) {
+                // 始终上报每张缩略图在根坐标系的包围盒（拖选命中检测用）。
+                // 不只在选择模式才上报，否则长按起手那一刻（尚未进入选择态）bounds 还是空，
+                // 会漏掉刚按下后第一批划过的格子。onGloballyPositioned 只在布局变化时触发，
+                // 滚动/重组开销可接受。
                 Box(
                     Modifier.onGloballyPositioned { coords ->
                         if (coords.isAttached) {

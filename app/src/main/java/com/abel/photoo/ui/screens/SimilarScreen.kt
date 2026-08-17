@@ -195,6 +195,7 @@ fun SimilarScreen(
                     picks = picks,
                     onTogglePick = vm::toggleSimilarPick,
                     onAddPicks = vm::addSimilarPicks,
+                    onRemovePicks = vm::removeSimilarPicks,
                     onOpenPhoto = onOpenPhoto,
                     onOpenGroup = onOpenGroup,
                     onIgnore = { vm.resolveGroup(group.key) },
@@ -349,6 +350,7 @@ private fun SimilarGroupCard(
     picks: Set<Long>,
     onTogglePick: (Long) -> Unit,
     onAddPicks: (Collection<Long>) -> Unit,
+    onRemovePicks: (Collection<Long>) -> Unit,
     onOpenPhoto: (PhotoItem) -> Unit,
     onOpenGroup: (String) -> Unit,
     onIgnore: () -> Unit,
@@ -405,8 +407,10 @@ private fun SimilarGroupCard(
                 .pointerInput(Unit) {
                     detectDragSelect(
                         state = dragSelect,
-                        onPickStart = { id -> if (picks.isEmpty()) onAddPicks(setOf(id)) },
-                        onPickOver = { onAddPicks(setOf(it)) },
+                        isSelected = { id -> picks.contains(id) },
+                        onPick = { id, sel ->
+                            if (sel) onAddPicks(setOf(id)) else onRemovePicks(setOf(id))
+                        },
                     )
                 },
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -722,10 +726,10 @@ fun SimilarGroupDetailScreen(
                 .pointerInput(Unit) {
                     detectDragSelect(
                         state = dragSelect,
-                        onPickStart = { id ->
-                            if (vm.similarPicks.value.isEmpty()) vm.addSimilarPicks(setOf(id))
+                        isSelected = { id -> picks.contains(id) },
+                        onPick = { id, sel ->
+                            if (sel) vm.addSimilarPicks(setOf(id)) else vm.removeSimilarPicks(setOf(id))
                         },
-                        onPickOver = { vm.addSimilarPicks(setOf(it)) },
                     )
                 },
         ) {
