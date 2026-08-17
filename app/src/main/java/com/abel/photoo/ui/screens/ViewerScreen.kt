@@ -196,6 +196,9 @@ fun ViewerScreen(
     // 视频播放态：提升到查看器层级，供左上角 VIDEO 徽标显示"正在播放/已暂停"并点击切换，
     // 与 Live Photo 的 livePlaying 对称。
     var videoPlaying by remember { mutableStateOf(false) }
+    // 正在拖动视频进度条时为 true：期间关闭 Pager 的用户翻页（userScrollEnabled=false），
+    // 避免横向拖拽进度条时整页预览被带着左右翻动。
+    var seeking by remember { mutableStateOf(false) }
     // 记录最近一次翻页方向：删除后据此决定停在"下一张"还是"上一张"。
     var lastNavDir by remember { mutableStateOf<GestureDirection?>(null) }
     // 删除后想要落到的页码，等列表收缩（recomposition）后再跳转，避免越界黑屏。
@@ -398,7 +401,7 @@ fun ViewerScreen(
     ) {
         HorizontalPager(
             state = pagerState,
-            userScrollEnabled = horizontalIsPaging && !zoomed,
+            userScrollEnabled = horizontalIsPaging && !zoomed && !seeking,
             beyondViewportPageCount = 2,
             // 用照片 id 做页 key：删除中间某张后，后续页面的内容跟着 id 走，
             // 不会因为 position 前移而串页。
@@ -418,6 +421,8 @@ fun ViewerScreen(
                     onPlayingChange = { videoPlaying = it },
                     onSwipe = { runAction(actionOf(it), photo) },
                     onToggleChrome = { chromeVisible = !chromeVisible },
+                    seeking = seeking,
+                    onSeekingChange = { seeking = it },
                 )
             } else {
                 ZoomableImage(
@@ -828,6 +833,8 @@ private fun VideoPage(
     onPlayingChange: (Boolean) -> Unit,
     onSwipe: (GestureDirection) -> Unit,
     onToggleChrome: () -> Unit,
+    seeking: Boolean,
+    onSeekingChange: (Boolean) -> Unit,
 ) {
     // 首帧是否已经渲染出来：渲染前用视频缩略图海报盖住 VideoView 的黑屏，渲染后淡出海报。
     var revealed by remember(photo.id) { mutableStateOf(false) }
@@ -837,8 +844,6 @@ private fun VideoPage(
     // 进度条：时长 / 当前位置（毫秒），由播放循环轮询；定位时由 onSeek 回写。
     var duration by remember(photo.id) { mutableStateOf(0) }
     var position by remember(photo.id) { mutableStateOf(0) }
-    // 用户正在拖动进度条时为 true，此时暂停轮询回写，避免和拖拽目标值互相打架导致进度条抖动。
-    var seeking by remember(photo.id) { mutableStateOf(false) }
     // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
@@ -1002,7 +1007,7 @@ private fun VideoPage(
                 viewRef?.seekTo(ms)
                 position = ms
             },
-            onSeekingChange = { seeking = it },
+            onSeekingChange = onSeekingChange,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 168.dp, start = 16.dp, end = 16.dp),
