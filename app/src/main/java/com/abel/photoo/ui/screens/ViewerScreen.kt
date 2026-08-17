@@ -7,7 +7,6 @@ import android.view.View
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -63,7 +62,6 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LocationOn
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Tune
@@ -85,6 +83,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Job
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -412,7 +411,8 @@ fun ViewerScreen(
             val isCurrent = page == pagerState.currentPage
             if (photo.isVideo) {
                 // 视频：内置播放器，打开即自动播放（静音跟随 livePhoto）；
-                // 首帧出来前用视频缩略图当海报遮挡黑屏；全屏单击暂停/播放；上滑删除 / 下滑退出。
+                // 首帧出来前用视频缩略图当海报遮挡黑屏；手势与图片一致：单击显隐信息栏、双击播放/暂停、
+                // 纵向滑提交删除/退出、横向滑由 Pager 翻页。
                 VideoPage(
                     photo = photo,
                     sensitivity = sensitivity,
@@ -820,9 +820,13 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
 }
 
 /**
- * 视频播放页。单击播放/暂停（暂停时中央显示大播放按钮），
- * 上滑 / 下滑交给上层手势（删除 / 退出 / 撤销），左右横滑仍由 Pager 翻页；底部常驻进度条可定位。
- * playing 状态提升到外层（与 Live Photo 对称），由左上角 VIDEO 徽标与全屏单击共同驱动。
+ * 视频播放页。手势逻辑刻意与图片保持一致：
+ * - 单击：显隐信息栏 / 快速归入栏（滑动过程中这些栏始终显示，不会被手势切走）。
+ * - 双击：切换播放 / 暂停（与"单击显隐信息"分离，互不冲突）。
+ * - 纵向滑动越过阈值：直接提交删除 / 退出（与图片一致的离散手势，不跟手平移、不卡半途）。
+ * - 横向滑动：完全交给 HorizontalPager 翻页，本层不消费、也不误触发任何切换。
+ * 中央不再显示播放按钮（避免遮挡视频）；播放态可由左上角 VIDEO 徽标点击切换。
+ * playing 状态提升到外层（与 Live Photo 对称），由左上角 VIDEO 徽标与双击共同驱动。
  */
 @Composable
 private fun VideoPage(
@@ -844,10 +848,16 @@ private fun VideoPage(
     // 进度条：时长 / 当前位置（毫秒），由播放循环轮询；定位时由 onSeek 回写。
     var duration by remember(photo.id) { mutableStateOf(0) }
     var position by remember(photo.id) { mutableStateOf(0) }
-    // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
-    var exiting by remember { mutableStateOf(false) }
+    // 删除 / 退出飞出动画：纵向滑动越过阈值即"提交"，整段视频按屏高比例位移 + 淡出 + 轻微旋转。
+    // 不走"手指拖着挪、不到阈值就停在原地"那种逻辑——那会让视频卡在半途，且与图片手势不一致。
+    var exiting by remember(photo.id) { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
-    val offY = remember { Animatable(0f) }
+    // 双击判定：用 lastTapTime + 挂起的单击任务区分"单击=显隐信息栏 / 双击=播放暂停"。
+    var lastTapTime by remember(photo.id) { mutableStateOf(0L) }
+    var singleTapJob by remember(photo.id) { mutableStateOf<Job?>(null) }
+    // playing 的最新值引用：手势 lambda 只创建一次，读这个 state 才能拿到实时播放态。
+    var playingRef by remember(photo.id) { mutableStateOf(playing) }
+    playingRef = playing
     val scope = rememberCoroutineScope()
     val flyProgress by animateFloatAsState(
         targetValue = if (exiting) 1f else 0f,
@@ -888,8 +898,8 @@ private fun VideoPage(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    // 拖拽阶段：视频不透明跟手；飞出阶段：按屏高比例位移 + 淡出 + 轻微旋转。
-                    translationY = offY.value + if (exiting) {
+                    // 飞出阶段：整段视频按屏高比例位移 + 淡出 + 轻微旋转；不跟手平移。
+                    translationY = if (exiting) {
                         (if (exitDir == GestureDirection.UP) -1f else 1f) *
                             flyProgress * size.height * 1.3f
                     } else 0f
@@ -935,19 +945,11 @@ private fun VideoPage(
                 )
             }
         }
-        // 暂停态的居中播放指示（不可点击，点击交给上层手势层）。
-        if (!playing) {
-            Box(Modifier.align(Alignment.Center)) {
-                Icon(
-                    Icons.Rounded.PlayArrow,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.size(64.dp),
-                )
-            }
-        }
-        // 手势层：纵向拖拽时整段视频随手指平移（消费事件），横向滑交给 Pager 翻页，
-        // 单击全屏暂停/播放（同时显隐工具栏）。播放中拖拽不暂停，视频继续播。
+        // 手势层：
+        // - 单击：显隐信息栏 / 快速归入栏（与图片一致：滑动过程中这些栏保持显示，不会被手势切走）。
+        // - 双击：切换播放 / 暂停（避免和"单击显隐信息"互相冲突）。
+        // - 纵向滑动越过阈值：直接提交删除 / 退出（与图片一致的离散手势，不跟手平移、不卡半途）。
+        // - 横向滑动：完全交给 HorizontalPager 翻页，本层不消费、也不误触发任何切换。
         Box(
             Modifier
                 .fillMaxSize()
@@ -955,46 +957,58 @@ private fun VideoPage(
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)
                         var axisV = false
+                        var axisH = false
                         var totalX = 0f
                         var totalY = 0f
                         val slop = viewConfiguration.touchSlop
                         do {
                             val event = awaitPointerEvent()
-                            val pressed = event.changes.any { it.pressed }
-                            if (!axisV) {
+                            if (!axisV && !axisH) {
                                 val pan = event.calculatePan()
                                 totalX += pan.x
                                 totalY += pan.y
-                                if (abs(totalY) > slop) axisV = true
+                                if (abs(totalX) > slop) axisH = true
+                                else if (abs(totalY) > slop) axisV = true
                             }
+                            // 纵向手势本层消费掉，避免误触发 Pager 横向翻页；横向则放给 Pager。
                             if (axisV) {
-                                val pan = event.calculatePan()
-                                scope.launch { offY.snapTo(offY.value + pan.y) }
                                 event.changes.forEach { if (it.positionChanged()) it.consume() }
                             }
                         } while (event.changes.any { it.pressed })
-                        if (axisV) {
-                            val threshold = size.height * 0.16f / sensitivity.coerceAtLeast(0.2f)
-                            when {
-                                totalY < -threshold -> {
+                        when {
+                            axisH -> Unit // 横向交给 Pager 翻页，本层不处理也不改显隐
+                            axisV -> {
+                                val threshold = size.height * 0.16f / sensitivity.coerceAtLeast(0.2f)
+                                if (totalY < -threshold) {
                                     exitDir = GestureDirection.UP
                                     exiting = true
                                     onPlayingChange(false)
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.UP) }
-                                }
-                                totalY > threshold -> {
+                                } else if (totalY > threshold) {
                                     exitDir = GestureDirection.DOWN
                                     exiting = true
                                     onPlayingChange(false)
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.DOWN) }
-                                }
-                                abs(totalX) < slop && abs(totalY) < slop -> { onPlayingChange(!playing); onToggleChrome() }
-                                else -> Unit // 横向滑动交给 Pager 翻页，不切换工具栏
+                                } // 未过阈值：不提交、不移动，松手即还原
                             }
-                        } else {
-                            // 没怎么动：视为单击，全屏暂停/播放。
-                            onPlayingChange(!playing)
-                            onToggleChrome()
+                            else -> { // 几乎没动：视为单击（需与双击区分）
+                                val now = System.currentTimeMillis()
+                                if (now - lastTapTime < 300L) {
+                                    // 双击：切换播放 / 暂停。
+                                    singleTapJob?.cancel()
+                                    singleTapJob = null
+                                    lastTapTime = 0L
+                                    onPlayingChange(!playingRef)
+                                } else {
+                                    // 单击：延迟 300ms 后显隐信息栏；若期间再来一次点击就是双击，会被上面取消。
+                                    lastTapTime = now
+                                    singleTapJob = scope.launch {
+                                        delay(300L)
+                                        onToggleChrome()
+                                        singleTapJob = null
+                                    }
+                                }
+                            }
                         }
                     }
                 },
