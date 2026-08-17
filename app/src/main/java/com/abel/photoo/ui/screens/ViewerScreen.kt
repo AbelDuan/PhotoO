@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Undo
@@ -191,6 +193,9 @@ fun ViewerScreen(
     var zoomed by remember { mutableStateOf(false) }
     var livePlaying by remember { mutableStateOf(false) }
     var liveUri by remember { mutableStateOf<Uri?>(null) }
+    // 视频播放态：提升到查看器层级，供左上角 VIDEO 徽标显示"正在播放/已暂停"并点击切换，
+    // 与 Live Photo 的 livePlaying 对称。
+    var videoPlaying by remember { mutableStateOf(false) }
     // 记录最近一次翻页方向：删除后据此决定停在"下一张"还是"上一张"。
     var lastNavDir by remember { mutableStateOf<GestureDirection?>(null) }
     // 删除后想要落到的页码，等列表收缩（recomposition）后再跳转，避免越界黑屏。
@@ -359,6 +364,12 @@ fun ViewerScreen(
         }
     }
 
+    // 视频自动播放：切到视频即自动播放（静音跟随 livePhoto）；切走复位。
+    // 与 Live 对称——视频左上角徽标也由此驱动"播放中/已暂停"的视觉。
+    LaunchedEffect(current?.id) {
+        videoPlaying = current?.isVideo == true
+    }
+
     fun toggleLive() {
         val photo = current ?: return
         if (!photo.isLivePhoto) return
@@ -403,7 +414,8 @@ fun ViewerScreen(
                     photo = photo,
                     sensitivity = sensitivity,
                     liveMuted = liveMuted,
-                    autoPlay = true,
+                    playing = videoPlaying,
+                    onPlayingChange = { videoPlaying = it },
                     onSwipe = { runAction(actionOf(it), photo) },
                     onToggleChrome = { chromeVisible = !chromeVisible },
                 )
@@ -469,11 +481,17 @@ fun ViewerScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (current?.isLivePhoto == true) {
-                LiveBadge(
+            when {
+                current?.isLivePhoto == true -> LiveBadge(
                     playing = livePlaying,
                     muted = liveMuted,
                     onToggle = ::toggleLive,
+                    onToggleMute = { onSetLiveMuted(!liveMuted) },
+                )
+                current?.isVideo == true -> VideoBadge(
+                    playing = videoPlaying,
+                    muted = liveMuted,
+                    onToggle = { videoPlaying = !videoPlaying },
                     onToggleMute = { onSetLiveMuted(!liveMuted) },
                 )
             }
@@ -682,6 +700,64 @@ private fun LiveGlyph(active: Boolean) {
     }
 }
 
+/**
+ * 视频徽标：与 LIVE 徽标同款样式，只是换成摄像机图标 + "VIDEO" 文案；
+ * 静音开关共用 livePhoto 的 liveMuted（视频声音跟随实况静音），点按胶囊切换播放/暂停。
+ */
+@Composable
+private fun VideoBadge(
+    playing: Boolean,
+    muted: Boolean,
+    onToggle: () -> Unit,
+    onToggleMute: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = if (playing) 0.55f else 0.38f))
+                .clickable { onToggle() }
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.Videocam,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(15.dp),
+            )
+            Text(
+                "VIDEO",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp,
+            )
+        }
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable { onToggleMute() }
+                .padding(6.dp),
+        ) {
+            Icon(
+                if (muted) Icons.AutoMirrored.Rounded.VolumeOff
+                else Icons.AutoMirrored.Rounded.VolumeUp,
+                contentDescription = if (muted) "开启声音" else "静音",
+                tint = Color.White,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+    }
+}
+
 /** Live Photo 视频层。放在手势 Box 内部，VideoView 不消费触摸，滑动手势照常可用。 */
 @Composable
 private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
@@ -740,23 +816,27 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
 
 /**
  * 视频播放页。单击播放/暂停（暂停时中央显示大播放按钮），
- * 上滑 / 下滑交给上层手势（删除 / 退出 / 撤销），左右横滑仍由 Pager 翻页。
+ * 上滑 / 下滑交给上层手势（删除 / 退出 / 撤销），左右横滑仍由 Pager 翻页；底部常驻进度条可定位。
+ * playing 状态提升到外层（与 Live Photo 对称），由左上角 VIDEO 徽标与全屏单击共同驱动。
  */
 @Composable
 private fun VideoPage(
     photo: PhotoItem,
     sensitivity: Float,
     liveMuted: Boolean,
-    autoPlay: Boolean = true,
+    playing: Boolean,
+    onPlayingChange: (Boolean) -> Unit,
     onSwipe: (GestureDirection) -> Unit,
     onToggleChrome: () -> Unit,
 ) {
-    var playing by remember(photo.id) { mutableStateOf(autoPlay) }
     // 首帧是否已经渲染出来：渲染前用视频缩略图海报盖住 VideoView 的黑屏，渲染后淡出海报。
     var revealed by remember(photo.id) { mutableStateOf(false) }
     var viewRef by remember { mutableStateOf<VideoView?>(null) }
     // VideoView 不直接暴露音量，需持有底层 MediaPlayer 来控制静音（跟随 livePhoto 开关）。
     var playerRef by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    // 进度条：时长 / 当前位置（毫秒），由播放循环轮询；定位时由 onSeek 回写。
+    var duration by remember(photo.id) { mutableStateOf(0) }
+    var position by remember(photo.id) { mutableStateOf(0) }
     // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
@@ -768,7 +848,7 @@ private fun VideoPage(
         label = "vidFly",
     )
 
-    // 播放/暂停与 VideoView 同步：autoPlay 时首帧出来即自动播；之后点按切换。
+    // 播放/暂停与 VideoView 同步：首帧出来即自动播；之后点按切换。
     LaunchedEffect(viewRef, playing) {
         viewRef?.let { v ->
             if (playing) {
@@ -781,6 +861,18 @@ private fun VideoPage(
     // 静音跟随 livePhoto 的开关。
     LaunchedEffect(playerRef, liveMuted) {
         playerRef?.setVolume(if (liveMuted) 0f else 1f, if (liveMuted) 0f else 1f)
+    }
+    // 进度轮询：播放中每 250ms 刷新一次当前位置与时长，驱动底部进度条。
+    LaunchedEffect(viewRef, playing) {
+        if (!playing) return@LaunchedEffect
+        while (playing) {
+            val v = viewRef
+            if (v != null && v.duration > 0) {
+                duration = v.duration
+                position = v.currentPosition
+            }
+            delay(250)
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -815,7 +907,12 @@ private fun VideoPage(
                             }
                             false
                         }
-                        setOnCompletionListener { playing = false }
+                        setOnCompletionListener {
+                            onPlayingChange(false)
+                            val d = viewRef?.duration ?: 0
+                            duration = d
+                            position = d
+                        }
                     }.also { viewRef = it }
                 },
                 modifier = Modifier.fillMaxSize(),
@@ -874,27 +971,129 @@ private fun VideoPage(
                                 totalY < -threshold -> {
                                     exitDir = GestureDirection.UP
                                     exiting = true
-                                    playing = false
+                                    onPlayingChange(false)
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.UP) }
                                 }
                                 totalY > threshold -> {
                                     exitDir = GestureDirection.DOWN
                                     exiting = true
-                                    playing = false
+                                    onPlayingChange(false)
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.DOWN) }
                                 }
-                                abs(totalX) < slop && abs(totalY) < slop -> { playing = !playing; onToggleChrome() }
+                                abs(totalX) < slop && abs(totalY) < slop -> { onPlayingChange(!playing); onToggleChrome() }
                                 else -> Unit // 横向滑动交给 Pager 翻页，不切换工具栏
                             }
                         } else {
                             // 没怎么动：视为单击，全屏暂停/播放。
-                            playing = !playing
+                            onPlayingChange(!playing)
                             onToggleChrome()
                         }
                     }
                 },
         )
+        // 底部常驻视频进度条：可点按 / 拖动定位；自身消费横向手势，纵向滑动仍交给上层删除/退出。
+        VideoSeekBar(
+            position = position,
+            duration = duration,
+            onSeek = { ms ->
+                viewRef?.seekTo(ms)
+                position = ms
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 168.dp, start = 16.dp, end = 16.dp),
+        )
     }
+}
+
+/**
+ * 视频进度条：底部常驻。可点按定位、可横向拖动定位；自身消费横向手势，
+ * 因此不会误触发全屏播放/暂停；纵向滑动意图则放行给上层做删除/退出。
+ */
+@Composable
+private fun VideoSeekBar(
+    position: Int,
+    duration: Int,
+    onSeek: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(formatMs(position), color = Color.White, style = MaterialTheme.typography.labelSmall)
+        Box(
+            Modifier
+                .weight(1f)
+                .height(40.dp)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val w = size.width.toFloat()
+                        val toMs = { x: Float ->
+                            if (duration <= 0) 0
+                            else (x.coerceIn(0f, w) / w * duration).toInt().coerceIn(0, duration)
+                        }
+                        var vertical = false
+                        var lastX = down.position.x
+                        onSeek(toMs(down.position.x))
+                        do {
+                            val ev = awaitPointerEvent()
+                            ev.changes.forEach { ch ->
+                                if (ch.pressed) {
+                                    val dx = abs(ch.position.x - lastX)
+                                    val dy = abs(ch.position.y - down.position.y)
+                                    if (dy > 24f && dy > dx) {
+                                        // 纵向意图：放行给上层删除/退出手势，本层不消费。
+                                        vertical = true
+                                    } else if (!vertical) {
+                                        lastX = ch.position.x
+                                        onSeek(toMs(ch.position.x))
+                                        ch.consume()
+                                    }
+                                }
+                            }
+                        } while (ev.changes.any { it.pressed } && !vertical)
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp)),
+            )
+            val frac = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            Box(
+                Modifier
+                    .fillMaxWidth(frac.coerceAtLeast(0.0001f))
+                    .height(4.dp)
+                    .background(Color.White, RoundedCornerShape(2.dp)),
+            ) {
+                // 滑块停在进度末端（CenterEnd），并外移半个身位使圆点中心压在进度线上。
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .offset(x = 6.dp)
+                        .size(12.dp)
+                        .background(Color.White, RoundedCornerShape(6.dp)),
+                )
+            }
+        }
+        Text(formatMs(duration), color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/** 把毫秒格式化为 m:ss（用于进度条时间标签）。 */
+private fun formatMs(ms: Int): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val m = total / 60
+    val s = total % 60
+    return "%d:%02d".format(m, s)
 }
 
 @Composable
