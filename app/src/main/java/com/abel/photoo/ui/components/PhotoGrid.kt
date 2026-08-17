@@ -136,7 +136,10 @@ suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectDragSelect
         state.active = true
         val startId = hitTest(state.bounds, start + state.containerTopLeft)
         val target = startId?.let { !isSelected(it) }
-        if (startId != null) onPick(startId, target!!)
+        // 起手即按目标态处理锚点：未选->选中（进入多选态）；已选->保持不动，
+        // 后续拖动再按 target 统一取消。避免长按已选图时被误删、也避免与缩略图自身的
+        // onLongClick(toggleSelect) 打架导致"加了又删"进不了多选态。
+        if (startId != null && target == true) onPick(startId, true)
         var last = start + state.containerTopLeft
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)

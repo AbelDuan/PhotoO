@@ -130,7 +130,8 @@ fun AlbumDetailScreen(
                     onPhotoClick = { photo ->
                         if (selection.isNotEmpty()) vm.toggleSelect(photo.id) else onOpenPhoto(photo)
                     },
-                    onPhotoLongClick = { vm.toggleSelect(it.id) },
+                    // 长按进入多选由外层 detectDragSelect 统一处理，置空避免与拖选 onPick 抵消。
+                    onPhotoLongClick = { },
                     onToggleSection = { section ->
                         val ids = section.photos.map { it.id }
                         if (ids.all { it in selection }) vm.replaceSelection(selection - ids.toSet())

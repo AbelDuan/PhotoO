@@ -158,7 +158,9 @@ fun TimelineScreen(
                 onPhotoClick = { photo ->
                     if (selection.isNotEmpty()) vm.toggleSelect(photo.id) else onOpenPhoto(photo)
                 },
-                onPhotoLongClick = { photo -> vm.toggleSelect(photo.id) },
+                // 长按进入多选由外层 detectDragSelect 统一处理（选中锚点即进入多选态），
+                // 这里置空避免与拖选的 onPick 互相抵消，导致长按后选不中、进不了多选态。
+                onPhotoLongClick = { },
                 onToggleSection = { section ->
                     val ids = section.photos.map { it.id }
                     if (ids.all { it in selection }) {

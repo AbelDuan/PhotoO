@@ -752,7 +752,8 @@ fun SimilarGroupDetailScreen(
                     onPhotoClick = { photo ->
                         if (picks.isNotEmpty()) vm.toggleSimilarPick(photo.id) else onOpenPhoto(photo)
                     },
-                    onPhotoLongClick = { vm.toggleSimilarPick(it.id) },
+                    // 长按进入多选由外层 detectDragSelect 统一处理，置空避免与拖选 onPick 抵消。
+                    onPhotoLongClick = { },
                     onToggleSection = { section ->
                         val sids = section.photos.map { it.id }
                         if (sids.all { it in picks }) vm.setSimilarPicks(picks - sids.toSet())
