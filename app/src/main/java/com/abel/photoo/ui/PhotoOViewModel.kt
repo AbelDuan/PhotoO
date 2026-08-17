@@ -323,6 +323,8 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     fun setLiveMutedDefault(on: Boolean) = prefs.setLiveMutedDefault(on)
     fun setAmapKey(key: String) = prefs.setAmapKey(key)
     fun setAmapCloud(on: Boolean) = prefs.setAmapCloud(on)
+    /** 开关运行日志（对应设置里的「记录调试日志」）。 */
+    fun setLoggingEnabled(on: Boolean) = prefs.setLoggingEnabled(on)
 
     /** 把调试日志写入「下载」目录并返回其 content Uri，供设置页通过系统分享面板发出。 */
     fun shareDebugLogUri(): Uri? = repo.shareDebugLogUri()

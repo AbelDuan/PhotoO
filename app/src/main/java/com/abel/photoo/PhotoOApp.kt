@@ -36,6 +36,8 @@ class PhotoOApp : Application(), SingletonImageLoader.Factory {
         installCrashLogger()
         PhotoLog.init(this)
         container = AppContainer(this)
+        // 把设置里的「记录调试日志」状态应用到 PhotoLog（默认关，开启后才落盘）。
+        PhotoLog.setEnabled(container.prefs.current.loggingEnabled)
     }
 
     override fun onTerminate() {

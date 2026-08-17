@@ -293,13 +293,25 @@ fun SettingsScreen(
                     "PhotoO 只读写本机相册，不联网、不上传任何照片或位置信息。\n" +
                         "回收站是应用内的软删除；只有在回收站里再次删除，才会真正调用系统删除。"
                 )
+                SwitchRow(
+                    title = "记录调试日志",
+                    subtitle = "开启后把运行日志写入应用私有文件，可在下方「分享调试日志」导出；关闭即停止记录并清空旧日志",
+                    checked = settings.loggingEnabled,
+                    onChange = vm::setLoggingEnabled,
+                )
                 ActionRow(
                     title = "分享调试日志",
-                    subtitle = "把运行日志通过系统分享面板发出，方便排查 Live Photo / 地图等问题",
+                    subtitle = if (settings.loggingEnabled)
+                        "把运行日志通过系统分享面板发出，方便排查 Live Photo / 地图等问题"
+                    else "请先在上方打开「记录调试日志」",
                     onClick = {
+                        if (!settings.loggingEnabled) {
+                            vm.toast("请先在上方打开「记录调试日志」")
+                            return@ActionRow
+                        }
                         val uri = vm.shareDebugLogUri()
                         if (uri == null) {
-                            vm.toast("还没有日志文件")
+                            vm.toast("暂无可分享的日志（开启后操作一段时间再来）")
                             return@ActionRow
                         }
                         val intent = Intent(Intent.ACTION_SEND).apply {

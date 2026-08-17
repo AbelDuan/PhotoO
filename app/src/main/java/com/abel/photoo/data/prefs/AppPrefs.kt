@@ -2,6 +2,7 @@ package com.abel.photoo.data.prefs
 
 import android.content.Context
 import androidx.core.content.edit
+import com.abel.photoo.data.log.PhotoLog
 import com.abel.photoo.model.GestureAction
 import com.abel.photoo.model.GestureDirection
 import com.abel.photoo.model.GestureSensitivity
@@ -48,6 +49,8 @@ data class Settings(
     val amapKey: String = "",
     /** 地址解析走云端（高德 REST）还是本机 Geocoder。默认云端。 */
     val amapCloud: Boolean = true,
+    /** 是否把运行日志写入应用私有文件。默认关：正式版不后台落盘，需要时手动开启。 */
+    val loggingEnabled: Boolean = false,
 ) {
     fun gesture(dir: GestureDirection): GestureAction = gestures[dir] ?: dir.default
 
@@ -101,6 +104,7 @@ class AppPrefs(context: Context) {
         liveMutedDefault = sp.getBoolean(KEY_LIVE_MUTED_DEFAULT, true),
         amapKey = sp.getString(KEY_AMAP_KEY, "").orEmpty(),
         amapCloud = sp.getBoolean(KEY_AMAP_CLOUD, true),
+        loggingEnabled = sp.getBoolean(KEY_LOGGING, false),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -126,6 +130,7 @@ class AppPrefs(context: Context) {
             putBoolean(KEY_LIVE_MUTED_DEFAULT, next.liveMutedDefault)
             putString(KEY_AMAP_KEY, next.amapKey)
             putBoolean(KEY_AMAP_CLOUD, next.amapCloud)
+            putBoolean(KEY_LOGGING, next.loggingEnabled)
         }
     }
 
@@ -149,6 +154,15 @@ class AppPrefs(context: Context) {
     fun setLiveMutedDefault(on: Boolean) = update { copy(liveMutedDefault = on) }
     fun setAmapKey(key: String) = update { copy(amapKey = key.trim()) }
     fun setAmapCloud(on: Boolean) = update { copy(amapCloud = on) }
+
+    /**
+     * 开关运行日志：打开时 PhotoLog 开始把日志落盘到应用私有文件；
+     * 关闭时立刻停止记录，并清空已有日志文件，保证「分享」只反映开启后产生的内容。
+     */
+    fun setLoggingEnabled(on: Boolean) {
+        update { copy(loggingEnabled = on) }
+        PhotoLog.setEnabled(on)
+    }
 
     fun isGroupExpanded(key: String): Boolean = !_collapsedGroups.value.contains(key)
     fun setGroupExpanded(key: String, expanded: Boolean) {
@@ -186,6 +200,7 @@ class AppPrefs(context: Context) {
         const val KEY_LIVE_MUTED_DEFAULT = "live_muted_default"
         const val KEY_AMAP_KEY = "amap_key"
         const val KEY_AMAP_CLOUD = "amap_cloud"
+        const val KEY_LOGGING = "logging_enabled"
         const val KEY_GROUP_COLLAPSED = "group_collapsed"
         const val QUICK_DELIM = "\u001f"
     }

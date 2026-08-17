@@ -14,6 +14,10 @@ import java.util.Locale
  * 没有 IDE 时只能靠日志文件定位。文件写在 getExternalFilesDir(null)/logs/photoo.log，
  * 不需要任何权限；超过上限时截掉前半段继续写（环形覆盖）。
  * 设置页「导出日志」可把文件复制到系统下载目录分享出去。
+ *
+ * 是否落盘由 [enabled] 控制（对应设置里的「记录调试日志」开关）：
+ * 关闭时只保留 Logcat 输出、不写文件，并且立即清空旧日志文件，
+ * 保证导出的内容只反映开关打开之后产生的记录。
  */
 object PhotoLog {
 
@@ -22,7 +26,11 @@ object PhotoLog {
 
     private var dir: File? = null
 
-    fun init(context: Context) {
+    /** 是否把日志写入文件。默认关，由设置开关控制。Logcat 输出不受此影响。 */
+    @Volatile
+    private var enabled = false
+
+    fun init(context: Context, enabled: Boolean = false) {
         if (dir != null) return
         val d = File(
             context.getExternalFilesDir(null) ?: context.filesDir,
@@ -30,6 +38,18 @@ object PhotoLog {
         )
         d.mkdirs()
         dir = d
+        this.enabled = enabled
+    }
+
+    /** 当前是否正在记录日志到文件。 */
+    fun isEnabled(): Boolean = enabled
+
+    /** 开关日志落盘。关闭时立即清空已有日志文件，避免导出到陈旧内容。 */
+    fun setEnabled(on: Boolean) {
+        synchronized(lock) {
+            enabled = on
+            if (!on) runCatching { file()?.writeBytes(ByteArray(0)) }
+        }
     }
 
     /** 当前日志文件；未初始化或创建失败返回 null。 */
@@ -45,6 +65,8 @@ object PhotoLog {
         if (level == 'E') Log.e("PhotoO", "[$tag] $msg")
         else if (level == 'W') Log.w("PhotoO", "[$tag] $msg")
         else Log.i("PhotoO", "[$tag] $msg")
+        // 开关关闭时不落盘。
+        if (!enabled) return
         val f = file() ?: return
         val line = "${ts()} $level/$tag: $msg\n"
         synchronized(lock) {

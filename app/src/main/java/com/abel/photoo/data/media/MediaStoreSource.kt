@@ -149,13 +149,13 @@ class MediaStoreSource(private val context: Context) {
             context.contentResolver.query(uri, proj, null, null, null)
         }.getOrNull()?.use { c ->
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val bucketIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_ID)
             val relIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
             while (c.moveToNext()) {
                 val vid = ContentUris.withAppendedId(uri, c.getLong(idIdx))
-                val bucket = c.getLongOrNull(bucketIdx)
-                    ?: c.getStringOrNull(relIdx)?.hashCode()?.toLong() ?: -1L
+                // 关键：视频也必须用与照片一致的 folderKey(relative) 做 bucket 键，
+                // 否则照片侧按 folderKey 查不到同目录的同名视频，Live Photo 同文件识别失效。
+                val bucket = folderKey(c.getStringOrNull(relIdx).orEmpty())
                 val name = c.getStringOrNull(nameIdx).orEmpty()
                 val stem = name.substringBeforeLast('.', name)
                 if (stem.isNotEmpty()) out[Pair(bucket, stem)] = vid

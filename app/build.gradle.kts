@@ -14,11 +14,20 @@ android {
         applicationId = "com.abel.photoo"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0.0"
 
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("C:/android/keystore/photoo-release.jks")
+            storePassword = "photoo2026"
+            keyAlias = "photoo"
+            keyPassword = "photoo2026"
         }
     }
 
@@ -27,12 +36,11 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // 首版正式发布先关闭 R8 压缩/混淆，保证在不同机型上行为一致、可直接安装；
+            // 后续若要做体积优化，再在真机冒烟测试通过后再开启并补齐混淆规则。
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
