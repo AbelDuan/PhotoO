@@ -397,10 +397,13 @@ fun ViewerScreen(
             val photo = photos[page]
             val isCurrent = page == pagerState.currentPage
             if (photo.isVideo) {
-                // 视频：内置播放器，上滑删除 / 下滑退出 / 单击显隐工具栏。
+                // 视频：内置播放器，打开即自动播放（静音跟随 livePhoto）；
+                // 首帧出来前用视频缩略图当海报遮挡黑屏；全屏单击暂停/播放；上滑删除 / 下滑退出。
                 VideoPage(
                     photo = photo,
                     sensitivity = sensitivity,
+                    liveMuted = liveMuted,
+                    autoPlay = true,
                     onSwipe = { runAction(actionOf(it), photo) },
                     onToggleChrome = { chromeVisible = !chromeVisible },
                 )
@@ -743,11 +746,17 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
 private fun VideoPage(
     photo: PhotoItem,
     sensitivity: Float,
+    liveMuted: Boolean,
+    autoPlay: Boolean = true,
     onSwipe: (GestureDirection) -> Unit,
     onToggleChrome: () -> Unit,
 ) {
-    var playing by remember(photo.id) { mutableStateOf(false) }
+    var playing by remember(photo.id) { mutableStateOf(autoPlay) }
+    // 首帧是否已经渲染出来：渲染前用视频缩略图海报盖住 VideoView 的黑屏，渲染后淡出海报。
+    var revealed by remember(photo.id) { mutableStateOf(false) }
     var viewRef by remember { mutableStateOf<VideoView?>(null) }
+    // VideoView 不直接暴露音量，需持有底层 MediaPlayer 来控制静音（跟随 livePhoto 开关）。
+    var playerRef by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
     // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
@@ -758,6 +767,22 @@ private fun VideoPage(
         animationSpec = tween(220, easing = FastOutLinearInEasing),
         label = "vidFly",
     )
+
+    // 播放/暂停与 VideoView 同步：autoPlay 时首帧出来即自动播；之后点按切换。
+    LaunchedEffect(viewRef, playing) {
+        viewRef?.let { v ->
+            if (playing) {
+                if (!v.isPlaying) v.start()
+            } else {
+                if (v.isPlaying) v.pause()
+            }
+        }
+    }
+    // 静音跟随 livePhoto 的开关。
+    LaunchedEffect(playerRef, liveMuted) {
+        playerRef?.setVolume(if (liveMuted) 0f else 1f, if (liveMuted) 0f else 1f)
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(
             Modifier
@@ -774,19 +799,50 @@ private fun VideoPage(
                     } else 0f
                 },
         ) {
+            // 真正的视频层：始终挂载，确保 viewRef 能拿到；首帧出来前由下方海报遮挡，避免黑屏。
             AndroidView(
                 factory = { ctx ->
                     VideoView(ctx).apply {
                         setVideoURI(photo.uri)
-                        setOnPreparedListener { it.isLooping = false }
+                        setOnPreparedListener { mp ->
+                            playerRef = mp
+                            mp.isLooping = false
+                            mp.setVolume(if (liveMuted) 0f else 1f, if (liveMuted) 0f else 1f)
+                        }
+                        setOnInfoListener { _, what, _ ->
+                            if (what == android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                                revealed = true
+                            }
+                            false
+                        }
                         setOnCompletionListener { playing = false }
                     }.also { viewRef = it }
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+            // 海报：首帧渲染前覆盖 VideoView 的黑屏；video 出来后隐藏。
+            if (!revealed) {
+                AsyncImage(
+                    model = ThumbRequest(photo.uri, Thumbs.TARGET),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                )
+            }
+        }
+        // 暂停态的居中播放指示（不可点击，点击交给上层手势层）。
+        if (!playing) {
+            Box(Modifier.align(Alignment.Center)) {
+                Icon(
+                    Icons.Rounded.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(64.dp),
+                )
+            }
         }
         // 手势层：纵向拖拽时整段视频随手指平移（消费事件），横向滑交给 Pager 翻页，
-        // 单击显隐工具栏。播放中拖拽不暂停，视频继续播。
+        // 单击全屏暂停/播放（同时显隐工具栏）。播放中拖拽不暂停，视频继续播。
         Box(
             Modifier
                 .fillMaxSize()
@@ -818,36 +874,26 @@ private fun VideoPage(
                                 totalY < -threshold -> {
                                     exitDir = GestureDirection.UP
                                     exiting = true
+                                    playing = false
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.UP) }
                                 }
                                 totalY > threshold -> {
                                     exitDir = GestureDirection.DOWN
                                     exiting = true
+                                    playing = false
                                     scope.launch { kotlinx.coroutines.delay(220); onSwipe(GestureDirection.DOWN) }
                                 }
-                                abs(totalX) < slop && abs(totalY) < slop -> onToggleChrome()
+                                abs(totalX) < slop && abs(totalY) < slop -> { playing = !playing; onToggleChrome() }
                                 else -> Unit // 横向滑动交给 Pager 翻页，不切换工具栏
                             }
                         } else {
-                            // 没怎么动：视为单击，显隐工具栏。
+                            // 没怎么动：视为单击，全屏暂停/播放。
+                            playing = !playing
                             onToggleChrome()
                         }
                     }
                 },
         )
-        if (!playing) {
-            IconButton(
-                onClick = { viewRef?.start(); playing = true },
-                modifier = Modifier.align(Alignment.Center),
-            ) {
-                Icon(
-                    Icons.Rounded.PlayArrow,
-                    contentDescription = "播放",
-                    tint = Color.White,
-                    modifier = Modifier.size(64.dp),
-                )
-            }
-        }
     }
 }
 
