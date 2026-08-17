@@ -837,6 +837,8 @@ private fun VideoPage(
     // 进度条：时长 / 当前位置（毫秒），由播放循环轮询；定位时由 onSeek 回写。
     var duration by remember(photo.id) { mutableStateOf(0) }
     var position by remember(photo.id) { mutableStateOf(0) }
+    // 用户正在拖动进度条时为 true，此时暂停轮询回写，避免和拖拽目标值互相打架导致进度条抖动。
+    var seeking by remember(photo.id) { mutableStateOf(false) }
     // 纵向拖拽：整段视频随手指平移（播放不中断），松手超阈值飞出删除/退出。
     var exiting by remember { mutableStateOf(false) }
     var exitDir by remember { mutableStateOf(GestureDirection.UP) }
@@ -863,13 +865,14 @@ private fun VideoPage(
         playerRef?.setVolume(if (liveMuted) 0f else 1f, if (liveMuted) 0f else 1f)
     }
     // 进度轮询：播放中每 250ms 刷新一次当前位置与时长，驱动底部进度条。
+    // 拖动进度条期间（seeking=true）不回写 position，避免与拖拽目标值冲突导致抖动。
     LaunchedEffect(viewRef, playing) {
         if (!playing) return@LaunchedEffect
         while (playing) {
             val v = viewRef
             if (v != null && v.duration > 0) {
                 duration = v.duration
-                position = v.currentPosition
+                if (!seeking) position = v.currentPosition
             }
             delay(250)
         }
@@ -999,6 +1002,7 @@ private fun VideoPage(
                 viewRef?.seekTo(ms)
                 position = ms
             },
+            onSeekingChange = { seeking = it },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 168.dp, start = 16.dp, end = 16.dp),
@@ -1015,6 +1019,7 @@ private fun VideoSeekBar(
     position: Int,
     duration: Int,
     onSeek: (Int) -> Unit,
+    onSeekingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -1032,6 +1037,7 @@ private fun VideoSeekBar(
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        onSeekingChange(true)
                         val w = size.width.toFloat()
                         val toMs = { x: Float ->
                             if (duration <= 0) 0
@@ -1040,26 +1046,30 @@ private fun VideoSeekBar(
                         var vertical = false
                         var lastX = down.position.x
                         onSeek(toMs(down.position.x))
-                        do {
-                            val ev = awaitPointerEvent()
-                            ev.changes.forEach { ch ->
-                                if (ch.pressed) {
-                                    val dx = abs(ch.position.x - lastX)
-                                    val dy = abs(ch.position.y - down.position.y)
-                                    if (dy > 24f && dy > dx) {
-                                        // 纵向意图：放行给上层删除/退出手势，本层不消费。
-                                        vertical = true
-                                    } else if (!vertical) {
-                                        lastX = ch.position.x
-                                        onSeek(toMs(ch.position.x))
-                                        ch.consume()
+                        try {
+                            do {
+                                val ev = awaitPointerEvent()
+                                ev.changes.forEach { ch ->
+                                    if (ch.pressed) {
+                                        val dx = abs(ch.position.x - lastX)
+                                        val dy = abs(ch.position.y - down.position.y)
+                                        if (dy > 24f && dy > dx) {
+                                            // 纵向意图：放行给上层删除/退出手势，本层不消费。
+                                            vertical = true
+                                        } else if (!vertical) {
+                                            lastX = ch.position.x
+                                            onSeek(toMs(ch.position.x))
+                                            ch.consume()
+                                        }
                                     }
                                 }
-                            }
-                        } while (ev.changes.any { it.pressed } && !vertical)
+                            } while (ev.changes.any { it.pressed } && !vertical)
+                        } finally {
+                            onSeekingChange(false)
+                        }
                     }
                 },
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.CenterStart,
         ) {
             Box(
                 Modifier
@@ -1074,11 +1084,10 @@ private fun VideoSeekBar(
                     .height(4.dp)
                     .background(Color.White, RoundedCornerShape(2.dp)),
             ) {
-                // 滑块停在进度末端（CenterEnd），并外移半个身位使圆点中心压在进度线上。
+                // 滑块停在进度末端（CenterEnd），圆点中心压在进度线右端。
                 Box(
                     Modifier
                         .align(Alignment.CenterEnd)
-                        .offset(x = 6.dp)
                         .size(12.dp)
                         .background(Color.White, RoundedCornerShape(6.dp)),
                 )
