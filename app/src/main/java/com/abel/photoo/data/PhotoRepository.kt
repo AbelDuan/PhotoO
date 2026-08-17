@@ -677,6 +677,9 @@ class PhotoRepository(
         if (ids.isEmpty() || name.isBlank()) return
         ids.forEach { stagedMoves[it] = name.trim() }
         _stagedMoves.value = stagedMoves.toMap()
+        // 暂存即视为"已处理/已归入"：立即从待处理列表与"待处理"时间线里隐藏，
+        // 实际写盘仍推迟到「确认归入」或退出查看器时整批执行（只弹一次权限确认）。
+        applyLocalState(ids) { it.copy(reviewed = true, reviewAction = ReviewAction.MOVED) }
     }
 
     /** 取消某些照片的暂存标记（不传 ids 则清空全部）。 */

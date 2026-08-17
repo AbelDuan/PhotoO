@@ -302,6 +302,15 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                     },
                     onStartReview = { reviewing = true },
                     onOpenSimilar = { tab = Tab.SIMILAR },
+                    videoPermissionMissing = !hasVideoPermission(context),
+                    onOpenSettings = {
+                        context.startActivity(
+                            Intent(
+                                AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    },
                 )
 
                 Tab.ALBUMS -> AlbumsScreen(
@@ -626,7 +635,7 @@ private fun SelectionBar(
         Box(Modifier.weight(1f))
         BarAction(Icons.Rounded.SelectAll, "全选", onSelectAll)
         BarAction(Icons.Rounded.FolderOpen, "归档", onMove)
-        BarAction(Icons.Rounded.DoneAll, "已看", onKeep)
+        BarAction(Icons.Rounded.DoneAll, "已处理", onKeep)
         BarAction(Icons.Rounded.Delete, "删除", onTrash, MaterialTheme.colorScheme.error)
     }
 }
@@ -685,6 +694,17 @@ private fun hasMediaPermission(context: Context): Boolean {
         ) == PackageManager.PERMISSION_GRANTED
     }
     return false
+}
+
+/** 视频读取权限：Android 13+ 需 READ_MEDIA_VIDEO；更老系统由 READ_EXTERNAL_STORAGE 覆盖。 */
+private fun hasVideoPermission(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) ==
+            PackageManager.PERMISSION_GRANTED
+    } else {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+    }
 }
 
 /** 没权限时的引导页。 */

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -27,9 +28,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +61,9 @@ fun TimelineScreen(
     onOpenPhoto: (PhotoItem) -> Unit,
     onStartReview: () -> Unit,
     onOpenSimilar: () -> Unit,
+    /** 未授予视频读取权限时显示提示横幅。 */
+    videoPermissionMissing: Boolean = false,
+    onOpenSettings: () -> Unit = {},
 ) {
     val photos by vm.photos.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
@@ -64,8 +71,12 @@ fun TimelineScreen(
     val stats by vm.stats.collectAsStateWithLifecycle()
     val loading by vm.loading.collectAsStateWithLifecycle()
 
-    val sections = remember(photos, settings.grouping) {
-        Format.buildSections(photos, settings.grouping)
+    // 首页默认只显示"待处理"照片（未删除、未归入相册、未标记已看），
+    // 可在"待处理 / 全部"之间切换；已处理的照片会被自动隐藏，避免首页越堆越乱。
+    var pendingOnly by remember { mutableStateOf(true) }
+    val visiblePhotos = if (pendingOnly) photos.filter { !it.reviewed } else photos
+    val sections = remember(visiblePhotos, settings.grouping) {
+        Format.buildSections(visiblePhotos, settings.grouping)
     }
     val gridState = rememberLazyGridState()
     // 长按拖动连续选择：网格容器上报位置，手势检测器命中后追加选中。
@@ -103,6 +114,14 @@ fun TimelineScreen(
                     onSimilar = onOpenSimilar,
                 )
             }
+            item(span = { GridItemSpan(maxLineSpan) }, key = "pendingFilter") {
+                PendingFilterRow(
+                    pendingOnly = pendingOnly,
+                    pendingCount = photos.count { !it.reviewed },
+                    totalCount = photos.size,
+                    onToggle = { pendingOnly = it },
+                )
+            }
             item(span = { GridItemSpan(maxLineSpan) }, key = "grouping") {
                 GroupingRow(
                     current = settings.grouping,
@@ -110,11 +129,21 @@ fun TimelineScreen(
                 )
             }
 
-            if (photos.isEmpty() && !loading) {
+            if (videoPermissionMissing) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "videoWarn") {
+                    VideoPermissionBanner(onOpenSettings = onOpenSettings)
+                }
+            }
+
+            if (visiblePhotos.isEmpty() && !loading) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
                     EmptyState(
-                        title = "还没有照片",
-                        subtitle = "确认已授予相册读取权限，或先用相机拍几张。",
+                        title = if (pendingOnly) "没有待处理的照片" else "还没有照片",
+                        subtitle = if (pendingOnly) {
+                            "全部照片都已处理（已归入相册或标记已看）。点上方「全部」可查看所有照片。"
+                        } else {
+                            "确认已授予相册读取权限，或先用相机拍几张。"
+                        },
                         modifier = Modifier.padding(top = 40.dp),
                     )
                 }
@@ -266,5 +295,61 @@ private fun GroupingRow(
                 label = { Text(g.label) },
             )
         }
+    }
+}
+
+/** 首页顶部"待处理 / 全部"切换：默认只显示未处理的照片。 */
+@Composable
+private fun PendingFilterRow(
+    pendingOnly: Boolean,
+    pendingCount: Int,
+    totalCount: Int,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = pendingOnly,
+            onClick = { onToggle(true) },
+            label = { Text("待处理 $pendingCount") },
+        )
+        FilterChip(
+            selected = !pendingOnly,
+            onClick = { onToggle(false) },
+            label = { Text("全部 $totalCount") },
+        )
+    }
+}
+
+/** 未授予视频读取权限时的提示横幅，引导去系统设置开启。 */
+@Composable
+private fun VideoPermissionBanner(onOpenSettings: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            Icons.Rounded.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            "未授予视频读取权限，视频不会显示。去设置里把 PhotoO 的「视频」权限打开即可。",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onOpenSettings) { Text("去设置") }
     }
 }

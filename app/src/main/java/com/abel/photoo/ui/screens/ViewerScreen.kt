@@ -198,9 +198,9 @@ fun ViewerScreen(
     var showQuickPicker by remember { mutableStateOf(false) }
 
     val current = photos.getOrNull(pagerState.currentPage.coerceIn(0, photos.lastIndex))
-    // 已暂存待归入的照片总数，以及"有哪些相册已经有照片被标记归入"（用于高亮这些相册，
-    // 不论当前停在哪张，点过归入的相册都保持彩色标识，直到整批确认 / 清空）。
-    val stagedAlbums = staged.values.toSet()
+    // 只高亮"当前这张照片"已归入的相册：切到别的照片时高亮随之变化，
+    // 不再像之前那样所有被标记过的相册全局常亮。
+    val stagedAlbums = current?.let { staged[it.id]?.let { setOf(it) } } ?: emptySet()
     val stagedCount = staged.size
 
     // 照片被删除后列表收缩，currentPage 可能越界（最常见：删掉最后一张）。
@@ -279,13 +279,28 @@ fun ViewerScreen(
     }
 
     /**
-     * 照片"处理完成"后的统一前进逻辑：按当前浏览方向切走。
-     * 从前往后浏览（lastNavDir=LEFT）→ 切下一张；从后往前浏览（lastNavDir=RIGHT）→ 切上一张。
-     * 删除走自己的 pendingDeleteTarget（列表收缩后停在正确页），不在这里处理。
+     * 照片"处理完成"后的统一前进逻辑：跳到下一张"待处理"照片
+     * （未被删除、未归入相册、未标记已看 —— 即 !reviewed 且不在本次暂存里）。
+     * 从前往后浏览（lastNavDir=LEFT）→ 往后找；从后往前（lastNavDir=RIGHT）→ 往前找；
+     * 某方向没有更多待处理时退回默认方向；都没有则停在当前。
      */
+    fun nextPendingPage(from: Int, dir: Int): Int? {
+        var i = from + dir
+        while (i in photos.indices) {
+            val p = photos[i]
+            if (!p.reviewed && p.id !in staged) return i
+            i += dir
+        }
+        return null
+    }
+
     fun proceedAfterAction() {
-        val delta = if (lastNavDir == GestureDirection.RIGHT) -1 else 1
-        goPage(delta)
+        val from = pagerState.currentPage.coerceIn(0, photos.lastIndex)
+        val dir = if (lastNavDir == GestureDirection.RIGHT) -1 else 1
+        val target = nextPendingPage(from, dir) ?: nextPendingPage(from, 1) ?: from
+        if (target != from) {
+            scope.launch { pagerState.animateScrollToPage(target) }
+        }
     }
 
     // 外部（相册选择器落定）通知：处理完当前照片后按浏览方向切走。

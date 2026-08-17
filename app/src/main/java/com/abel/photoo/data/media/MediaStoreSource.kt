@@ -196,7 +196,10 @@ class MediaStoreSource(private val context: Context) {
             val heightIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
             val mimeIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)
             val pathIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
-            val orientationIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.ORIENTATION)
+            // 视频表在很多机型（尤其 Android 13+）上没有 orientation 列：
+            // 用 getColumnIndex 取，取不到就当 0，避免 getColumnIndexOrThrow 抛异常，
+            // 否则整次视频查询会被 runCatching 吞成空（表现为"任何地方都看不到视频"）。
+            val orientationIdx = c.getColumnIndex(MediaStore.Video.Media.ORIENTATION)
 
             while (c.moveToNext()) {
                 try {
@@ -223,7 +226,7 @@ class MediaStoreSource(private val context: Context) {
                         width = c.getIntOrNull(widthIdx) ?: 0,
                         height = c.getIntOrNull(heightIdx) ?: 0,
                         mimeType = c.getStringOrNull(mimeIdx).orEmpty(),
-                        orientation = c.getIntOrNull(orientationIdx) ?: 0,
+                        orientation = if (orientationIdx >= 0) c.getIntOrNull(orientationIdx) ?: 0 else 0,
                         isVideo = true,
                     )
                 } catch (e: Throwable) {
