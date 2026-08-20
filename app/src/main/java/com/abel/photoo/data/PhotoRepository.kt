@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import java.io.File
 import com.abel.photoo.data.db.PhotoODb
 import com.abel.photoo.data.exif.ExifReader
 import com.abel.photoo.data.log.PhotoLog
@@ -71,6 +72,12 @@ class PhotoRepository(
     val exif = ExifReader(context)
 
     private val refreshLock = Mutex()
+    /**
+     * 本次运行内被"刷新"按钮确认删除/不可访问的视频 id。
+     * 常规刷新（含 MediaStore 自动变化的 observer）会尊重这份清单，避免清理掉后又被死条目加回来。
+     * 不落库：重启后 MediaStore 若仍残留死条目，用户再点一次刷新即可重新清理。
+     */
+    private val prunedVideoIds = HashSet<Long>()
     private var scanJob: Job? = null
     private var hashCache: MutableMap<Long, PhotoODb.HashRow> = HashMap()
 
@@ -149,7 +156,9 @@ class PhotoRepository(
             val images = withContext(Dispatchers.IO) { source.queryPhotos() }
             val videos = withContext(Dispatchers.IO) { source.queryVideos() }
             // 图片与视频合并进同一份图库快照，统一管理；按时间倒序铺开。
-            val raw = (images + videos).sortedByDescending { it.dateTaken }
+            // 同时剔除本次运行内已被"刷新"按钮确认删除/不可访问的视频（MediaStore 仍残留的死条目）。
+            val raw = (images + videos).filterNot { it.isVideo && it.id in prunedVideoIds }
+                .sortedByDescending { it.dateTaken }
             Log.d("PhotoO", "媒体扫描完成：图片 ${images.size} 张，视频 ${videos.size} 个")
             val states = withContext(Dispatchers.IO) { db.loadAllStates() }
             val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
@@ -240,6 +249,32 @@ class PhotoRepository(
         } finally {
             _loading.value = false
         }
+    }
+
+    /**
+     * 首页"刷新"按钮专用：重新校验库里视频文件是否还在（脚本移动/删除后 MediaStore 可能残留死条目），
+     * 把已删除/不可访问的视频从图库里移除，并返回清理掉的数量（供 Toast 提示）。
+     * 仅用户主动点按钮时调用；普通自动刷新不触发，避免后台静默改动列表。
+     */
+    suspend fun rescanStaleVideos(): Int {
+        // 取 MediaStore 当前还能查到的视频 (id -> 绝对路径)。
+        val paths = withContext(Dispatchers.IO) { source.queryVideoPaths() }
+        val current = _photos.value
+        val dead = current.filter { p ->
+            if (!p.isVideo) false
+            else {
+                val path = paths[p.id]
+                path == null || !File(path).exists()
+            }
+        }
+        val n = dead.size
+        if (n > 0) {
+            prunedVideoIds.addAll(dead.map { it.id })
+            emit("已清理 $n 个已删除/不可访问的视频")
+        }
+        // 走一次常规刷新：会自动尊重 prunedVideoIds，确保相册/统计同步、且这些视频不再回来。
+        refresh()
+        return n
     }
 
     fun photosOf(bucketId: Long): List<PhotoItem> =

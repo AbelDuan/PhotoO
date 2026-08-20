@@ -267,8 +267,8 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                             IconButton(onClick = { trashOpen = true }) {
                                 Icon(Icons.Rounded.DeleteOutline, contentDescription = "回收站")
                             }
-                            IconButton(onClick = vm::refresh) {
-                                Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
+                            IconButton(onClick = vm::rescanStaleVideos) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "刷新（清理已删视频）")
                             }
                         }
                     },

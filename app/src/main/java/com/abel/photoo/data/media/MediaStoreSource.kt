@@ -6,6 +6,7 @@ import android.database.ContentObserver
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import java.io.File
 import androidx.core.database.getIntOrNull
 import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
@@ -232,6 +233,30 @@ class MediaStoreSource(private val context: Context) {
                 } catch (e: Throwable) {
                     android.util.Log.w("PhotoO", "skip unreadable video row", e)
                 }
+            }
+        }
+        return out
+    }
+
+    /**
+     * 取所有视频的 (id -> 绝对文件路径)。用于"刷新"按钮重新校验视频文件是否还在：
+     * 脚本把视频移走/删除后，MediaStore 可能仍残留死条目，用路径做 File.exists() 即可判断。
+     * 无 READ_MEDIA_VIDEO 权限时查询返回空（路径拿不到），此时不做清理，避免误删。
+     */
+    fun queryVideoPaths(): Map<Long, String> {
+        val out = HashMap<Long, String>()
+        val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val proj = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DATA)
+        runCatching {
+            context.contentResolver.query(uri, proj, null, null, null)
+        }.getOrNull()?.use { c ->
+            val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val dataIdx = c.getColumnIndex(MediaStore.Video.Media.DATA)
+            if (dataIdx < 0) return@use
+            while (c.moveToNext()) {
+                val id = c.getLong(idIdx)
+                val data = c.getStringOrNull(dataIdx)
+                if (!data.isNullOrBlank()) out[id] = data
             }
         }
         return out

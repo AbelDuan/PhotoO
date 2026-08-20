@@ -140,6 +140,11 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.refresh() }
     }
 
+    /** 首页"刷新"按钮：重新校验视频文件是否还在，清掉已删除/不可访问的视频。 */
+    fun rescanStaleVideos() {
+        viewModelScope.launch { repo.rescanStaleVideos() }
+    }
+
     /** 供 Activity 的 onResume 调用：权限还没拿到时什么都不做。 */
     fun refreshIfReady() {
         if (permissionReady) refresh()
