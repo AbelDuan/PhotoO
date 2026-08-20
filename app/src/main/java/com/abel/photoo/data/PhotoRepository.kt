@@ -1,11 +1,15 @@
 package com.abel.photoo.data
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.abel.photoo.data.db.PhotoODb
 import com.abel.photoo.data.exif.ExifReader
 import com.abel.photoo.data.log.PhotoLog
@@ -135,7 +139,19 @@ class PhotoRepository(
             // 秒开：先读上次扫描的媒体缓存快照（几十毫秒），网格立即有内容，
             // refresh() 完成后再用最新 MediaStore 结果校正（可能只差几百毫秒）。
             val cached = withContext(Dispatchers.IO) { db.loadMediaCache() }
-            if (cached.isNotEmpty()) _photos.value = cached
+            if (cached.isNotEmpty()) {
+                // 同步重新筛选视频：用户有脚本每晚把视频移走并删本地，MediaStore 行会滞后，
+                // 缓存（上次扫描快照）里就可能留着这些死视频。打开瞬间就用最新视频查询结果
+                // 把它们剔除，避免网格里出现点不开、播不了的残留——不用等后台 refresh 才纠正。
+                val cleaned = withContext(Dispatchers.IO) { filterDeletedVideos(cached) }
+                if (cleaned.size != cached.size) {
+                    // 缓存确实含有已删视频，立即用干净版本覆盖落库，下次启动更稳。
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) { db.saveMediaCache(cleaned) } }
+                    }
+                }
+                _photos.value = cleaned
+            }
             // refresh() 末尾会自动触发一次实况扫描（结果落库，稳定后几乎零开销）。
             refresh()
         }
@@ -144,6 +160,33 @@ class PhotoRepository(
             .debounce(700)
             .onEach { refresh() }
             .launchIn(scope)
+    }
+
+    /**
+     * 打开瞬间同步剔除"缓存里还在、但系统里文件已不在"的视频。
+     *
+     * 直接重查一次视频表（数量远小于图片，很快）拿到当前仍然存在的视频 id 集合，
+     * 凡是缓存里是视频、却不在该集合中的，一律剔除——这样秒开渲染的网格里不会出现
+     * 点不开、播不了的残留，也不必等后台 refresh 才纠正。
+     * 没有视频读取权限时不删（[MediaStoreSource.queryVideos] 在无权限时会返回空，
+     * 不能据此误删全部视频）。
+     */
+    private fun filterDeletedVideos(cached: List<PhotoItem>): List<PhotoItem> {
+        if (!hasVideoPermission()) return cached
+        val liveVideoIds = source.queryVideos()
+            .mapTo(HashSet(cached.size.coerceAtLeast(8))) { it.id }
+        return cached.filter { !it.isVideo || it.id in liveVideoIds }
+    }
+
+    /** 视频读取权限：Android 13+ 需 READ_MEDIA_VIDEO；更老系统由 READ_EXTERNAL_STORAGE 覆盖。 */
+    private fun hasVideoPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+        }
     }
 
     // ------------------------------------------------------------------ 读取

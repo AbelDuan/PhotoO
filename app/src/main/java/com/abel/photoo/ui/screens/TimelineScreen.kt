@@ -71,9 +71,9 @@ fun TimelineScreen(
     val stats by vm.stats.collectAsStateWithLifecycle()
     val loading by vm.loading.collectAsStateWithLifecycle()
 
-    // 首页默认只显示"待处理"照片（未删除、未归入相册、未标记已看），
-    // 可在"待处理 / 全部"之间切换；已处理的照片会被自动隐藏，避免首页越堆越乱。
-    var pendingOnly by remember { mutableStateOf(true) }
+    // 首页默认显示全部照片缩略图（秒开：打开立刻就有内容，不会先弹"没有待处理的照片"）。
+    // 仍可在"待处理 / 全部"之间切换；"待处理"只显示未处理的照片，避免首页越堆越乱。
+    var pendingOnly by remember { mutableStateOf(false) }
     val visiblePhotos = if (pendingOnly) photos.filter { !it.reviewed } else photos
     val sections = remember(visiblePhotos, settings.grouping) {
         Format.buildSections(visiblePhotos, settings.grouping)
