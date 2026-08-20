@@ -341,6 +341,9 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     /** 把调试日志写入「下载」目录并返回其 content Uri，供设置页通过系统分享面板发出。 */
     fun shareDebugLogUri(): Uri? = repo.shareDebugLogUri()
 
+    /** 清空调试日志（复现问题前清场，缩小日志量便于定位）。 */
+    fun clearDebugLog() = repo.clearDebugLog()
+
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)
 

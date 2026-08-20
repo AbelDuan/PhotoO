@@ -322,6 +322,15 @@ fun SettingsScreen(
                         context.startActivity(Intent.createChooser(intent, "分享调试日志"))
                     },
                 )
+                ActionRow(
+                    title = "清空调试日志",
+                    subtitle = "一键清空当前日志并写一行时间标记，复现问题前清场、缩小日志量",
+                    danger = true,
+                    onClick = {
+                        vm.clearDebugLog()
+                        vm.toast("已清空调试日志")
+                    },
+                )
             }
         }
     }

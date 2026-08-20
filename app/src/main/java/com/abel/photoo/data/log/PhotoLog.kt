@@ -55,6 +55,19 @@ object PhotoLog {
     /** 当前日志文件；未初始化或创建失败返回 null。 */
     fun file(): File? = dir?.let { File(it, "photoo.log") }
 
+    /**
+     * 清空当前日志内容，并写一行时间标记作分界（复现问题前清场，
+     * 之后导出的日志只含新记录，量更小、更好定位）。不影响开关状态。
+     */
+    fun clear() {
+        synchronized(lock) {
+            runCatching {
+                val f = file() ?: return
+                f.writeBytes("=== 日志已清空 ${ts()} ===\n".toByteArray())
+            }
+        }
+    }
+
     fun i(tag: String, msg: String) = write('I', tag, msg)
     fun w(tag: String, msg: String) = write('W', tag, msg)
     fun e(tag: String, msg: String) = write('E', tag, msg)
