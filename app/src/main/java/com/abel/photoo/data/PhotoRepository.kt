@@ -251,6 +251,18 @@ class PhotoRepository(
     fun findPhoto(id: Long): PhotoItem? = _photos.value.firstOrNull { it.id == id }
 
     /**
+     * 移除已确认文件失效的媒体（打开/播放时校验失败）。
+     * 仅从当前列表剔除；下次 [refresh] 时的存在性过滤（MediaStoreSource）会继续挡住它们。
+     */
+    fun removeStaleMedia(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val set = ids.toSet()
+        val before = _photos.value.size
+        _photos.value = _photos.value.filterNot { it.id in set }
+        PhotoLog.w("MediaFilter", "removeStale: ids=$set removed=${before - _photos.value.size}")
+    }
+
+    /**
      * 两张照片列表是否等价（id 与会影响展示的本地状态一致）。
      * 用于刷新后内容未变时跳过 StateFlow 重新发射，避免整棵 UI 树（尤其是时间线网格）
      * 因本应用自身删除/归档触发的 MediaStore 变化、或外部应用改动而做无谓重组。

@@ -344,6 +344,9 @@ class PhotoOViewModel(app: Application) : AndroidViewModel(app) {
     /** 清空调试日志（复现问题前清场，缩小日志量便于定位）。 */
     fun clearDebugLog() = repo.clearDebugLog()
 
+    /** 移除已确认文件失效的媒体条目（播放失败兜底，避免残留点不开的死条目）。 */
+    fun removeStaleMedia(ids: Collection<Long>) = repo.removeStaleMedia(ids)
+
     /** 扫描全库 EXIF 里的 GPS 信息，结果落库复用。 */
     fun scanGeo(force: Boolean = false) = repo.scanGeo(force)
 

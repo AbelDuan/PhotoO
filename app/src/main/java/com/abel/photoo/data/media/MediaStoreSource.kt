@@ -9,11 +9,13 @@ import android.provider.MediaStore
 import androidx.core.database.getIntOrNull
 import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
+import com.abel.photoo.data.log.PhotoLog
 import com.abel.photoo.model.AlbumItem
 import com.abel.photoo.model.PhotoItem
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import java.io.File
 
 /**
  * 只读地把系统相册（含小米自带相册的所有目录）读成 [PhotoItem] / [AlbumItem]。
@@ -40,6 +42,7 @@ class MediaStoreSource(private val context: Context) {
         MediaStore.Images.Media.MIME_TYPE,
         MediaStore.Images.Media.RELATIVE_PATH,
         MediaStore.Images.Media.ORIENTATION,
+        MediaStore.Images.Media.DATA,
     )
 
     /** 读取全部图片。已被系统回收站隐藏的项默认不会返回。 */
@@ -74,6 +77,9 @@ class MediaStoreSource(private val context: Context) {
             val mimeIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
             val pathIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
             val orientationIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.ORIENTATION)
+            // 文件真实路径。Android 10+ 对第三方应用可能返回受限/空；能拿到时用于过滤
+            // "系统里已不存在"的孤儿行（如脚本直接移动/删除文件后 MediaStore 未更新）。
+            val dataIdx = c.getColumnIndex(MediaStore.Images.Media.DATA)
 
             while (c.moveToNext()) {
                 try {
@@ -88,6 +94,13 @@ class MediaStoreSource(private val context: Context) {
                     // thumbUri 仅作占位，真正高效缩略图由网格层用 MediaStore.getThumbnail 取得。
                     val thumbUri = fullUri
                     val name = c.getStringOrNull(nameIdx).orEmpty()
+                    // 文件已不在磁盘（被外部脚本删除/移动）的孤儿行：与系统相册一致直接跳过，
+                    // 否则列表里会残留"点不开、播不了"的死条目。
+                    val data = if (dataIdx >= 0) c.getStringOrNull(dataIdx) else null
+                    if (data != null && !File(data).exists()) {
+                        PhotoLog.i("MediaFilter", "stale-image-skip: id=$id name=$name path=$data")
+                        continue
+                    }
                     // Live Photo：同 bucket 下存在同名视频（IMG_1234.HEIC + IMG_1234.MOV）。
                     // 内嵌视频（小米等把实况写进 JPG）由后台扫描 XMP 检测，见 PhotoRepository.scanLivePhotos。
                     val stem = name.substringBeforeLast('.', name)
@@ -144,6 +157,7 @@ class MediaStoreSource(private val context: Context) {
             MediaStore.Video.Media.BUCKET_ID,
             MediaStore.Video.Media.RELATIVE_PATH,
             MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DATA,
         )
         runCatching {
             context.contentResolver.query(uri, proj, null, null, null)
@@ -151,12 +165,16 @@ class MediaStoreSource(private val context: Context) {
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
             val relIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val dataIdx = c.getColumnIndex(MediaStore.Video.Media.DATA)
             while (c.moveToNext()) {
                 val vid = ContentUris.withAppendedId(uri, c.getLong(idIdx))
                 // 关键：视频也必须用与照片一致的 folderKey(relative) 做 bucket 键，
                 // 否则照片侧按 folderKey 查不到同目录的同名视频，Live Photo 同文件识别失效。
                 val bucket = folderKey(c.getStringOrNull(relIdx).orEmpty())
                 val name = c.getStringOrNull(nameIdx).orEmpty()
+                // 文件已不在磁盘的孤儿行不参与匹配，避免图片被识别成 Live 却播放不了。
+                val data = if (dataIdx >= 0) c.getStringOrNull(dataIdx) else null
+                if (data != null && !File(data).exists()) continue
                 val stem = name.substringBeforeLast('.', name)
                 if (stem.isNotEmpty()) out[Pair(bucket, stem)] = vid
             }
@@ -182,6 +200,7 @@ class MediaStoreSource(private val context: Context) {
             MediaStore.Video.Media.MIME_TYPE,
             MediaStore.Video.Media.RELATIVE_PATH,
             MediaStore.Video.Media.ORIENTATION,
+            MediaStore.Video.Media.DATA,
         )
         runCatching {
             context.contentResolver.query(uri, proj, null, null, null)
@@ -200,6 +219,8 @@ class MediaStoreSource(private val context: Context) {
             // 用 getColumnIndex 取，取不到就当 0，避免 getColumnIndexOrThrow 抛异常，
             // 否则整次视频查询会被 runCatching 吞成空（表现为"任何地方都看不到视频"）。
             val orientationIdx = c.getColumnIndex(MediaStore.Video.Media.ORIENTATION)
+            // 文件真实路径（Android 10+ 可能受限为空），用于过滤被外部脚本删除/移动的孤儿行。
+            val dataIdx = c.getColumnIndex(MediaStore.Video.Media.DATA)
 
             while (c.moveToNext()) {
                 try {
@@ -212,6 +233,13 @@ class MediaStoreSource(private val context: Context) {
                         ?: relative.trim('/').substringAfterLast('/').ifEmpty { "根目录" }
                     val fullUri = ContentUris.withAppendedId(uri, id)
                     val name = c.getStringOrNull(nameIdx).orEmpty()
+                    // 文件已不在磁盘（被外部脚本删除/移动）的孤儿行：与系统相册一致直接跳过，
+                    // 否则列表里会残留"点不开、播不了"的死条目。
+                    val data = if (dataIdx >= 0) c.getStringOrNull(dataIdx) else null
+                    if (data != null && !File(data).exists()) {
+                        PhotoLog.i("MediaFilter", "stale-video-skip: id=$id name=$name path=$data")
+                        continue
+                    }
                     out += PhotoItem(
                         id = id,
                         uri = fullUri,

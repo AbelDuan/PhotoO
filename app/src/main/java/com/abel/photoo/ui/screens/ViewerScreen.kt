@@ -142,6 +142,8 @@ fun ViewerScreen(
     onToggleFavorite: (PhotoItem) -> Unit,
     onMoveToAlbum: (PhotoItem) -> Unit,
     onResolveLiveVideo: suspend (PhotoItem) -> Uri? = { null },
+    /** 打开/播放时确认文件已失效（被外部删除/移动）的条目，用于从列表剔除。 */
+    onMediaMissing: (PhotoItem) -> Unit = {},
     onUndo: () -> Unit = {},
     /** 是否有可撤销的删除（删除后 FAB / 撤销胶囊出现）。 */
     undoAvailable: Boolean = false,
@@ -424,6 +426,7 @@ fun ViewerScreen(
                     onToggleChrome = { chromeVisible = !chromeVisible },
                     seeking = seeking,
                     onSeekingChange = { seeking = it },
+                    onMediaMissing = onMediaMissing,
                 )
             } else {
                 ZoomableImage(
@@ -843,6 +846,7 @@ private fun VideoPage(
     onToggleChrome: () -> Unit,
     seeking: Boolean,
     onSeekingChange: (Boolean) -> Unit,
+    onMediaMissing: (PhotoItem) -> Unit = {},
 ) {
     // 首帧是否已经渲染出来：渲染前用视频缩略图海报盖住 VideoView 的黑屏，渲染后淡出海报。
     var revealed by remember(photo.id) { mutableStateOf(false) }
@@ -859,6 +863,8 @@ private fun VideoPage(
     // 双击判定：用 lastTapTime + 挂起的单击任务区分"单击=显隐信息栏 / 双击=播放暂停"。
     var lastTapTime by remember(photo.id) { mutableStateOf(0L) }
     var singleTapJob by remember(photo.id) { mutableStateOf<Job?>(null) }
+    // 文件失效上报去重：同一张只上报一次，避免 onError 反复触发反复移除。
+    var missingReported by remember(photo.id) { mutableStateOf(false) }
     // playing 的最新值引用：手势 lambda 只创建一次，读这个 state 才能拿到实时播放态。
     var playingRef by remember(photo.id) { mutableStateOf(playing) }
     playingRef = playing
@@ -944,6 +950,24 @@ private fun VideoPage(
                                     "what=$what extra=$extra uri=${photo.uri}",
                             )
                             onPlayingChange(false)
+                            // 文件缺失类错误（what=1 未知错误，常见于 MediaStore 孤儿行）：
+                            // 二次确认 content URI 确实打不开后上报，把死条目从列表剔除，
+                            // 与系统相册的"不显示已删除文件"行为保持一致。
+                            if (what == android.media.MediaPlayer.MEDIA_ERROR_UNKNOWN &&
+                                !missingReported
+                            ) {
+                                val uri = photo.uri
+                                scope.launch {
+                                    val gone = runCatching {
+                                        ctx.contentResolver.openFileDescriptor(uri, "r")?.close()
+                                        false
+                                    }.getOrDefault(true)
+                                    if (gone && !missingReported) {
+                                        missingReported = true
+                                        onMediaMissing(photo)
+                                    }
+                                }
+                            }
                             true
                         }
                     }.also { viewRef = it }

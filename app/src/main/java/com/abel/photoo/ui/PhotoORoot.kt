@@ -483,6 +483,9 @@ fun PhotoORoot(vm: PhotoOViewModel) {
                         undoAvailable = undoEvent != null,
                         undoCount = undoEvent?.count ?: 0,
                         onResolveLiveVideo = { vm.resolveLiveVideo(it) },
+                        // 播放时确认文件已失效（被外部删除/移动）的条目：直接从列表剔除，
+                        // 与系统相册一致，不再残留"点不开、播不了"的死条目。
+                        onMediaMissing = { vm.removeStaleMedia(listOf(it.id)) },
                         onMarkKept = { vm.markKept(listOf(it.id)) },
                         gestures = settings.gestures,
                         sensitivity = settings.gestureSensitivity.factor,
