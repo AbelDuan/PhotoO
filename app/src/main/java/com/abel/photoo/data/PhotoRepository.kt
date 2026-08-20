@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +132,10 @@ class PhotoRepository(
         if (observing) return
         observing = true
         scope.launch {
+            // 秒开：先读上次扫描的媒体缓存快照（几十毫秒），网格立即有内容，
+            // refresh() 完成后再用最新 MediaStore 结果校正（可能只差几百毫秒）。
+            val cached = withContext(Dispatchers.IO) { db.loadMediaCache() }
+            if (cached.isNotEmpty()) _photos.value = cached
             // refresh() 末尾会自动触发一次实况扫描（结果落库，稳定后几乎零开销）。
             refresh()
         }
@@ -146,16 +151,27 @@ class PhotoRepository(
     suspend fun refresh() = refreshLock.withLock {
         _loading.value = true
         try {
-            val images = withContext(Dispatchers.IO) { source.queryPhotos() }
-            val videos = withContext(Dispatchers.IO) { source.queryVideos() }
+            // 互不依赖的 IO 全部并行：两个 MediaStore 全量查询 + 4 次本地库读取同时进行，
+            // 启动耗时从「串行求和」降为「最慢的一项」，是秒开的关键优化之一。
+            val (images, videos, states, trashRows, customAlbums, liveMap) = coroutineScope {
+                val imagesD = async(Dispatchers.IO) { source.queryPhotos() }
+                val videosD = async(Dispatchers.IO) { source.queryVideos() }
+                val statesD = async(Dispatchers.IO) { db.loadAllStates() }
+                val trashD = async(Dispatchers.IO) { db.listTrash() }
+                val albumsD = async(Dispatchers.IO) { db.listCustomAlbums() }
+                val liveD = async(Dispatchers.IO) { db.loadLivePhotoMap() }
+                RefreshBatch(
+                    images = imagesD.await(),
+                    videos = videosD.await(),
+                    states = statesD.await(),
+                    trashRows = trashD.await(),
+                    customAlbums = albumsD.await(),
+                    liveMap = liveD.await(),
+                )
+            }
             // 图片与视频合并进同一份图库快照，统一管理；按时间倒序铺开。
             val raw = (images + videos).sortedByDescending { it.dateTaken }
             Log.d("PhotoO", "媒体扫描完成：图片 ${images.size} 张，视频 ${videos.size} 个")
-            val states = withContext(Dispatchers.IO) { db.loadAllStates() }
-            val trashRows = withContext(Dispatchers.IO) { db.listTrash() }
-            val customAlbums = withContext(Dispatchers.IO) { db.listCustomAlbums() }
-            // 已识别的 Live Photo（尤其是内嵌视频）落库后直接复用，避免每次重扫。
-            val liveMap = withContext(Dispatchers.IO) { db.loadLivePhotoMap() }
 
             val liveIds = raw.mapTo(HashSet(raw.size)) { it.id }
             // 系统里已经消失的条目，回收站里也要清掉，否则会留下点不开的空壳。
@@ -185,6 +201,12 @@ class PhotoRepository(
             // 阻止 observer 驱动的 refresh 引发整树无谓重组。
             if (!photosEquivalent(_photos.value, visible)) {
                 _photos.value = visible
+            }
+            // 秒开缓存：把最终可见列表落库（异步写，不拖慢本轮 refresh 收尾），
+            // 下次启动先渲染它、再后台 refresh 校正。
+            val cacheSnapshot = visible
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { db.saveMediaCache(cacheSnapshot) } }
             }
             _trash.value = trashRows
                 .filter { it.id in liveIds }
@@ -244,6 +266,16 @@ class PhotoRepository(
 
     fun photosOf(bucketId: Long): List<PhotoItem> =
         _photos.value.filter { it.bucketId == bucketId }
+
+    /** refresh 并行化的批次结果（一次 coroutineScope 内同时发起全部独立 IO）。 */
+    private data class RefreshBatch(
+        val images: List<PhotoItem>,
+        val videos: List<PhotoItem>,
+        val states: Map<Long, PhotoODb.StateRow>,
+        val trashRows: List<PhotoODb.TrashRow>,
+        val customAlbums: List<PhotoODb.CustomAlbum>,
+        val liveMap: Map<Long, PhotoODb.LiveRow>,
+    )
 
     fun pendingPhotos(): List<PhotoItem> =
         _photos.value.filterNot { it.reviewed }.sortedByDescending { it.dateTaken }
@@ -1270,25 +1302,39 @@ class PhotoRepository(
         _scanState.value = ScanState.Idle
     }
 
+    /** 上次聚类的输入指纹（照片 id 集合 + 阈值 + 保留策略 + 已处理组），相同则直接复用上次结果。 */
+    private var lastGroupsKey: String? = null
+
     /** 阈值 / 保留策略变了不需要重新算哈希，重新聚类即可。 */
     fun rebuildGroups(
         level: SimilarityLevel = prefs.current.similarityLevel,
         strategy: KeepStrategy = prefs.current.keepStrategy,
     ) {
         scope.launch {
+            val resolved = withContext(Dispatchers.IO) { db.listResolvedGroups() }
+            // 相似分组只基于图片；视频无感知哈希，混入会让聚类产出空组或报错。
+            val snapshot = _photos.value.filter { it.mimeType.startsWith("image/") }
+            // 聚类去重：照片集合 / 阈值 / 保留策略 / 已处理组都没变就直接复用上次结果，
+            // 启动不再白算一遍（几千张照片的相似聚类是启动卡顿的主因之一）。
+            val key = buildString {
+                append(level.name); append('|'); append(strategy.name); append('|')
+                snapshot.forEach { append(it.id).append(',') }
+                append('|')
+                resolved.forEach { append(it).append(',') }
+            }
+            if (key == lastGroupsKey) return@launch
             if (hashCache.isEmpty()) {
                 hashCache = withContext(Dispatchers.IO) { db.loadHashes() }
             }
             if (hashCache.isEmpty()) {
                 _similarGroups.value = emptyList()
+                lastGroupsKey = key
                 return@launch
             }
-            val resolved = withContext(Dispatchers.IO) { db.listResolvedGroups() }
-            // 相似分组只基于图片；视频无感知哈希，混入会让聚类产出空组或报错。
-            val snapshot = _photos.value.filter { it.mimeType.startsWith("image/") }
             val groups = withContext(Dispatchers.Default) {
                 SimilarityEngine.buildGroups(snapshot, hashCache, level, strategy, resolved)
             }
+            lastGroupsKey = key
             _similarGroups.value = groups
         }
     }

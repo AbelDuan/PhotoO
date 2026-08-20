@@ -3,10 +3,12 @@ package com.abel.photoo.data.db
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.net.Uri
 import java.io.File
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.getStringOrNull
+import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.ReviewAction
 
 /**
@@ -102,6 +104,16 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         )
 
         db.execSQL(GEO_TABLE_SQL)
+
+        db.execSQL(
+            """
+            CREATE TABLE media_cache (
+                id         INTEGER PRIMARY KEY,
+                payload    TEXT    NOT NULL,
+                saved_at   INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -120,6 +132,17 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         }
         if (oldVersion < 3) {
             db.execSQL(GEO_TABLE_SQL)
+        }
+        if (oldVersion < 4) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS media_cache (
+                    id         INTEGER PRIMARY KEY,
+                    payload    TEXT    NOT NULL,
+                    saved_at   INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
         }
     }
 
@@ -544,6 +567,93 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
         writableDatabase.execSQL("DELETE FROM photo_geo")
     }
 
+    // ------------------------------------------------------------ 秒开媒体缓存
+
+    /**
+     * 上次扫描的媒体列表快照（启动先渲染它，再后台 refresh 校正，实现秒开）。
+     * 整份列表序列化成一行 JSON 文本；损坏/为空时返回空列表（调用方会走正常全量扫描）。
+     */
+    fun loadMediaCache(): List<PhotoItem> {
+        val payload = readableDatabase.rawQuery(
+            "SELECT payload FROM media_cache WHERE id = 1", null
+        ).use { c -> if (c.moveToFirst()) c.getStringOrNull(0) else null } ?: return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(payload)
+            ArrayList<PhotoItem>(arr.length()).apply {
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    add(
+                        PhotoItem(
+                            id = o.getLong("id"),
+                            uri = Uri.parse(o.getString("uri")),
+                            thumbUri = Uri.parse(o.getString("thumbUri")),
+                            displayName = o.optString("name", ""),
+                            bucketId = o.optLong("bucketId", 0L),
+                            bucketName = o.optString("bucketName", ""),
+                            relativePath = o.optString("relativePath", ""),
+                            dateTaken = o.optLong("dateTaken", 0L),
+                            dateModified = o.optLong("dateModified", 0L),
+                            size = o.optLong("size", 0L),
+                            width = o.optInt("width", 0),
+                            height = o.optInt("height", 0),
+                            mimeType = o.optString("mimeType", ""),
+                            orientation = o.optInt("orientation", 0),
+                            isVideo = o.optBoolean("isVideo", false),
+                            reviewed = o.optBoolean("reviewed", false),
+                            reviewAction = parseAction(o.optString("reviewAction", "")),
+                            favorite = o.optBoolean("favorite", false),
+                            liveType = o.optInt("liveType", 0),
+                            liveVideoUri = if (o.has("liveVideoUri")) {
+                                Uri.parse(o.getString("liveVideoUri"))
+                            } else null,
+                            liveOffset = o.optLong("liveOffset", 0L),
+                        )
+                    )
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    /** 把当前可见媒体列表序列化落库（覆盖写，单行）。 */
+    fun saveMediaCache(items: List<PhotoItem>) {
+        if (items.isEmpty()) return
+        val payload = runCatching {
+            val arr = org.json.JSONArray()
+            items.forEach { p ->
+                arr.put(
+                    org.json.JSONObject().apply {
+                        put("id", p.id)
+                        put("uri", p.uri.toString())
+                        put("thumbUri", p.thumbUri.toString())
+                        put("name", p.displayName)
+                        put("bucketId", p.bucketId)
+                        put("bucketName", p.bucketName)
+                        put("relativePath", p.relativePath)
+                        put("dateTaken", p.dateTaken)
+                        put("dateModified", p.dateModified)
+                        put("size", p.size)
+                        put("width", p.width)
+                        put("height", p.height)
+                        put("mimeType", p.mimeType)
+                        put("orientation", p.orientation)
+                        put("isVideo", p.isVideo)
+                        put("reviewed", p.reviewed)
+                        put("reviewAction", p.reviewAction.name)
+                        put("favorite", p.favorite)
+                        put("liveType", p.liveType)
+                        if (p.liveVideoUri != null) put("liveVideoUri", p.liveVideoUri.toString())
+                        put("liveOffset", p.liveOffset)
+                    }
+                )
+            }
+            arr.toString()
+        }.getOrNull() ?: return
+        writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO media_cache(id, payload, saved_at) VALUES(1, ?, ?)",
+            arrayOf<Any>(payload, System.currentTimeMillis())
+        )
+    }
+
     // ------------------------------------------------------------------ 工具
 
     private inline fun SQLiteDatabase.transaction(block: (SQLiteDatabase) -> Unit) {
@@ -561,7 +671,7 @@ class PhotoODb(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "photoo.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
 
         /** onCreate 与 onUpgrade 共用同一份建表语句，避免两边写歪了。 */
         private val GEO_TABLE_SQL = """
