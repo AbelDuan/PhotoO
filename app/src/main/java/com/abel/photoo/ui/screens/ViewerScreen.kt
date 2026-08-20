@@ -416,7 +416,6 @@ fun ViewerScreen(
                 // 纵向滑提交删除/退出、横向滑由 Pager 翻页。
                 VideoPage(
                     photo = photo,
-                    isCurrent = isCurrent,
                     sensitivity = sensitivity,
                     liveMuted = liveMuted,
                     playing = videoPlaying,
@@ -836,7 +835,6 @@ private fun LiveVideoLayer(uri: Uri, muted: Boolean, onFinished: () -> Unit) {
 @Composable
 private fun VideoPage(
     photo: PhotoItem,
-    isCurrent: Boolean,
     sensitivity: Float,
     liveMuted: Boolean,
     playing: Boolean,
@@ -851,9 +849,6 @@ private fun VideoPage(
     var viewRef by remember { mutableStateOf<VideoView?>(null) }
     // VideoView 不直接暴露音量，需持有底层 MediaPlayer 来控制静音（跟随 livePhoto 开关）。
     var playerRef by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
-    // 是否已 setVideoURI（prepare 过）。只在「当前页」才触发，避免 Pager 预载相邻视频页
-    // 提前 prepare——既浪费资源，还会在看不到的页面上报错（甚至弹出系统"无法播放此视频"对话框）。
-    var prepared by remember(photo.id) { mutableStateOf(false) }
     // 进度条：时长 / 当前位置（毫秒），由播放循环轮询；定位时由 onSeek 回写。
     var duration by remember(photo.id) { mutableStateOf(0) }
     var position by remember(photo.id) { mutableStateOf(0) }
@@ -874,29 +869,25 @@ private fun VideoPage(
         label = "vidFly",
     )
 
-    // 播放/暂停与 VideoView 同步：仅当前页在 prepare 完成后才真正播放；
-    // 非当前页（Pager 预载）一律暂停，避免多页视频同时出声/串播。
-    LaunchedEffect(viewRef, prepared, playing, isCurrent) {
-        val v = viewRef ?: return@LaunchedEffect
-        if (isCurrent && prepared) {
+    // 播放/暂停与 VideoView 同步：首帧出来即自动播；之后点按切换。
+    LaunchedEffect(viewRef, playing) {
+        viewRef?.let { v ->
             if (playing) {
                 if (!v.isPlaying) v.start()
             } else {
                 if (v.isPlaying) v.pause()
             }
-        } else {
-            if (v.isPlaying) v.pause()
         }
     }
     // 静音跟随 livePhoto 的开关。
     LaunchedEffect(playerRef, liveMuted) {
         playerRef?.setVolume(if (liveMuted) 0f else 1f, if (liveMuted) 0f else 1f)
     }
-    // 进度轮询：仅当前页播放中每 250ms 刷新一次当前位置与时长，驱动底部进度条。
+    // 进度轮询：播放中每 250ms 刷新一次当前位置与时长，驱动底部进度条。
     // 拖动进度条期间（seeking=true）不回写 position，避免与拖拽目标值冲突导致抖动。
-    LaunchedEffect(viewRef, playing, isCurrent) {
-        if (!playing || !isCurrent) return@LaunchedEffect
-        while (playing && isCurrent) {
+    LaunchedEffect(viewRef, playing) {
+        if (!playing) return@LaunchedEffect
+        while (playing) {
             val v = viewRef
             if (v != null && v.duration > 0) {
                 duration = v.duration
@@ -923,11 +914,10 @@ private fun VideoPage(
                 },
         ) {
             // 真正的视频层：始终挂载，确保 viewRef 能拿到；首帧出来前由下方海报遮挡，避免黑屏。
-            // setVideoURI 不在 factory 里调（那会让 Pager 预载的相邻视频页也提前 prepare），
-            // 而是等 isCurrent 为真时在 update 里触发，见下方 prepared 逻辑。
             AndroidView(
                 factory = { ctx ->
                     VideoView(ctx).apply {
+                        setVideoURI(photo.uri)
                         setOnPreparedListener { mp ->
                             playerRef = mp
                             mp.isLooping = false
@@ -957,13 +947,6 @@ private fun VideoPage(
                             true
                         }
                     }.also { viewRef = it }
-                },
-                update = { v ->
-                    // 只有当前页才真正加载视频；翻走/预载的页不 prepare，也就不报错、不出声。
-                    if (isCurrent && !prepared) {
-                        prepared = true
-                        runCatching { v.setVideoURI(photo.uri) }
-                    }
                 },
                 modifier = Modifier.fillMaxSize(),
             )
