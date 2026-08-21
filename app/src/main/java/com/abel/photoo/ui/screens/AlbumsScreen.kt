@@ -270,7 +270,7 @@ fun AlbumsScreen(
         if (!sortMode) {
             LazyGridFastScroller(
                 state = gridState,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+                contentPadding = contentPadding,
             )
         }
     }

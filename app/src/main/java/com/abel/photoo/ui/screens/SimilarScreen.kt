@@ -210,7 +210,7 @@ fun SimilarScreen(
         }
         LazyListFastScroller(
             state = listState,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            contentPadding = contentPadding,
         )
 
         if (picks.isNotEmpty()) {

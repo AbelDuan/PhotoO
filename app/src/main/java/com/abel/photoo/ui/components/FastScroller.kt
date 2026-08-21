@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -145,11 +147,16 @@ fun FastScroller(
     }
 }
 
-/** 给 LazyVerticalGrid 用的快速滚动手柄。 */
+/**
+ * 给 LazyVerticalGrid 用的快速滚动手柄。
+ *
+ * @param contentPadding 屏幕的 Scaffold 内边距（顶栏 / 底栏占用的高度），用于把拖动手柄
+ *   约束在「顶栏底 ~ 底栏顶」的内容区，避免轨道画到状态栏/导航栏之下被遮挡。
+ */
 @Composable
 fun LazyGridFastScroller(
     state: LazyGridState,
-    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     bubble: String? = null,
 ) {
     val layout = state.layoutInfo
@@ -162,20 +169,36 @@ fun LazyGridFastScroller(
     val denom = if (total > 1) total - 1 else 1
     val fraction = (state.firstVisibleItemIndex.toFloat() / denom.toFloat()).coerceIn(0f, 1f)
     val scope = rememberCoroutineScope()
-    FastScroller(
-        modifier = modifier,
-        fraction = fraction,
-        enabled = true,
-        onScrub = { f -> scope.launch { state.scrollToItem((f * denom).roundToInt()) } },
-        bubble = bubble,
-    )
+    // 外层 Box 把手柄限定在内容区（顶/底栏之间），与网格 contentPadding 的 top/bottom 对齐。
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(
+                top = contentPadding.calculateTopPadding(),
+                bottom = contentPadding.calculateBottomPadding(),
+                end = 4.dp,
+            ),
+    ) {
+        FastScroller(
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            fraction = fraction,
+            enabled = true,
+            onScrub = { f -> scope.launch { state.scrollToItem((f * denom).roundToInt()) } },
+            bubble = bubble,
+        )
+    }
 }
 
-/** 给 LazyColumn 用的快速滚动手柄。 */
+/**
+ * 给 LazyColumn 用的快速滚动手柄。
+ *
+ * @param contentPadding 屏幕的 Scaffold 内边距（顶栏 / 底栏占用的高度），用于把拖动手柄
+ *   约束在「顶栏底 ~ 底栏顶」的内容区，避免轨道画到状态栏/导航栏之下被遮挡。
+ */
 @Composable
 fun LazyListFastScroller(
     state: LazyListState,
-    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     bubble: String? = null,
 ) {
     val layout = state.layoutInfo
@@ -188,11 +211,21 @@ fun LazyListFastScroller(
     val denom = if (total > 1) total - 1 else 1
     val fraction = (state.firstVisibleItemIndex.toFloat() / denom.toFloat()).coerceIn(0f, 1f)
     val scope = rememberCoroutineScope()
-    FastScroller(
-        modifier = modifier,
-        fraction = fraction,
-        enabled = true,
-        onScrub = { f -> scope.launch { state.scrollToItem((f * denom).roundToInt()) } },
-        bubble = bubble,
-    )
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(
+                top = contentPadding.calculateTopPadding(),
+                bottom = contentPadding.calculateBottomPadding(),
+                end = 4.dp,
+            ),
+    ) {
+        FastScroller(
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            fraction = fraction,
+            enabled = true,
+            onScrub = { f -> scope.launch { state.scrollToItem((f * denom).roundToInt()) } },
+            bubble = bubble,
+        )
+    }
 }

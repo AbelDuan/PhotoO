@@ -347,7 +347,7 @@ fun MapScreen(
     }
         LazyListFastScroller(
             state = listState,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            contentPadding = contentPadding,
         )
     }
     }

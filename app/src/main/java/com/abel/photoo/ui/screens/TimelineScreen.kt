@@ -186,9 +186,10 @@ fun TimelineScreen(
         }
 
         // 右侧快速滚动拖动手柄：拖动滑块即可跳跃定位，气泡显示当前日期。
+        // contentPadding 把手柄约束在顶栏/底栏之间的内容区，避免被遮挡。
         LazyGridFastScroller(
             state = gridState,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            contentPadding = contentPadding,
             bubble = scrubBubble,
         )
     }
