@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -78,6 +80,7 @@ import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
 import com.abel.photoo.ui.components.timelineSections
+import com.abel.photoo.ui.components.LazyListFastScroller
 import com.abel.photoo.ui.util.Format
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -136,6 +139,8 @@ fun MapScreen(
     }
 
     val located = geoPoints.size
+    // 地图页地点列表的快速滚动状态（仅在内容可滚动时显示拖动手柄）。
+    val listState = rememberLazyListState()
     val useOnline = settings.amapKey.isNotBlank()
 
     // 搜索时只保留命中的地点（关键字为空则全部显示）。
@@ -243,11 +248,17 @@ fun MapScreen(
             }
         }
 
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(
                 start = 14.dp,
-                end = 14.dp,
+                end = 36.dp,
                 bottom = contentPadding.calculateBottomPadding() + 28.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -333,6 +344,11 @@ fun MapScreen(
                 }
             }
         }
+    }
+        LazyListFastScroller(
+            state = listState,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+        )
     }
     }
 }

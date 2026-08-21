@@ -1,6 +1,7 @@
 package com.abel.photoo.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -37,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -55,6 +58,7 @@ import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.AlbumCard
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.LazyGridFastScroller
 import com.abel.photoo.ui.components.TextInputDialog
 
 /** 相册页。长按相册可以重命名 / 删除空相册。 */
@@ -76,6 +80,9 @@ fun AlbumsScreen(
     var deleting by remember { mutableStateOf<AlbumItem?>(null) }
     var actionTarget by remember { mutableStateOf<AlbumItem?>(null) }
     var sortMode by remember { mutableStateOf(false) }
+
+    // 相册网格的快速滚动状态（仅在内容可滚动且非排序模式时显示拖动手柄）。
+    val gridState = rememberLazyGridState()
 
     // 排序模式下展示的相册顺序（名字 + 拖动手柄调整）。外部顺序变化时同步回 albums。
     var ordered by remember(albums) { mutableStateOf(albums) }
@@ -100,11 +107,13 @@ fun AlbumsScreen(
         dragDelta = Offset.Zero
     }
 
+    Box(Modifier.fillMaxSize()) {
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         contentPadding = PaddingValues(
             start = 14.dp,
-            end = 14.dp,
+            end = 40.dp,
             top = contentPadding.calculateTopPadding(),
             bottom = contentPadding.calculateBottomPadding() + 24.dp,
         ),
@@ -256,6 +265,13 @@ fun AlbumsScreen(
                     trailing = null,
                 )
             }
+        }
+    }
+        if (!sortMode) {
+            LazyGridFastScroller(
+                state = gridState,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            )
         }
     }
 

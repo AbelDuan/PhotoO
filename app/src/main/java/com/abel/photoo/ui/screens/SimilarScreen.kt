@@ -18,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,6 +77,7 @@ import com.abel.photoo.model.SimilarityLevel
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.ConfirmDialog
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.LazyListFastScroller
 import com.abel.photoo.ui.components.detectDragSelect
 import com.abel.photoo.ui.components.rememberDragSelectState
 import com.abel.photoo.ui.components.timelineSections
@@ -104,6 +107,8 @@ fun SimilarScreen(
     var confirmRescan by remember { mutableStateOf(false) }
     // 组的排序：默认最近拍的排前面，也可以反过来先看老照片。
     var newestFirst by remember { mutableStateOf(true) }
+    // 相似列表的快速滚动状态（仅在内容可滚动时显示拖动手柄）。
+    val listState = rememberLazyListState()
 
     val visibleGroups = remember(groups, showResolved, newestFirst) {
         val base = if (showResolved) groups else groups.filterNot { it.resolved }
@@ -119,9 +124,10 @@ fun SimilarScreen(
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
+            state = listState,
             contentPadding = PaddingValues(
                 start = 14.dp,
-                end = 14.dp,
+                end = 36.dp,
                 top = contentPadding.calculateTopPadding(),
                 bottom = contentPadding.calculateBottomPadding() + (if (picks.isEmpty()) 24.dp else 96.dp),
             ),
@@ -202,6 +208,10 @@ fun SimilarScreen(
                 )
             }
         }
+        LazyListFastScroller(
+            state = listState,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+        )
 
         if (picks.isNotEmpty()) {
             SimilarBatchBar(

@@ -48,6 +48,7 @@ import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.TimelineGrouping
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.EmptyState
+import com.abel.photoo.ui.components.LazyGridFastScroller
 import com.abel.photoo.ui.components.detectDragSelect
 import com.abel.photoo.ui.components.rememberDragSelectState
 import com.abel.photoo.ui.components.timelineSections
@@ -81,6 +82,13 @@ fun TimelineScreen(
     val gridState = rememberLazyGridState()
     // 长按拖动连续选择：网格容器上报位置，手势检测器命中后追加选中。
     val dragSelect = rememberDragSelectState()
+    // 快速滚动拖动手柄的气泡：显示当前可见第一张照片的日期。
+    val photoById = remember(photos) { photos.associateBy { it.id } }
+    val scrubBubble = run {
+        val id = gridState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key is Long }?.key as? Long
+        id?.let { photoById[it]?.dateTaken }?.let { Format.friendlyDay(it) }
+    }
 
     Box(
         Modifier
@@ -101,7 +109,7 @@ fun TimelineScreen(
             state = gridState,
             contentPadding = PaddingValues(
                 start = 10.dp,
-                end = 10.dp,
+                end = 38.dp,
                 top = contentPadding.calculateTopPadding(),
                 bottom = contentPadding.calculateBottomPadding() + 24.dp,
             ),
@@ -176,6 +184,13 @@ fun TimelineScreen(
         if (loading && photos.isEmpty()) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }
+
+        // 右侧快速滚动拖动手柄：拖动滑块即可跳跃定位，气泡显示当前日期。
+        LazyGridFastScroller(
+            state = gridState,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            bubble = scrubBubble,
+        )
     }
 }
 
