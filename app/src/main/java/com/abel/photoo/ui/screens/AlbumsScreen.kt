@@ -3,11 +3,13 @@ package com.abel.photoo.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -37,12 +40,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.draw.clip
+import com.abel.photoo.ui.components.LazyGridFastScroller
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
@@ -76,6 +81,7 @@ fun AlbumsScreen(
     var deleting by remember { mutableStateOf<AlbumItem?>(null) }
     var actionTarget by remember { mutableStateOf<AlbumItem?>(null) }
     var sortMode by remember { mutableStateOf(false) }
+    val gridState = rememberLazyGridState()
 
     // 排序模式下展示的相册顺序（名字 + 拖动手柄调整）。外部顺序变化时同步回 albums。
     var ordered by remember(albums) { mutableStateOf(albums) }
@@ -100,18 +106,20 @@ fun AlbumsScreen(
         dragDelta = Offset.Zero
     }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(
-            start = 14.dp,
-            end = 14.dp,
-            top = contentPadding.calculateTopPadding(),
-            bottom = contentPadding.calculateBottomPadding() + 24.dp,
-        ),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalArrangement = Arrangement.spacedBy(if (sortMode) 8.dp else 18.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(
+                start = 14.dp,
+                end = 14.dp,
+                top = contentPadding.calculateTopPadding(),
+                bottom = contentPadding.calculateBottomPadding() + 24.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (sortMode) 8.dp else 18.dp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
         item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
             androidx.compose.foundation.layout.Row(
                 Modifier
@@ -257,6 +265,15 @@ fun AlbumsScreen(
                 )
             }
         }
+    }
+
+    if (!sortMode) {
+        // 右侧快速滚动拖动手柄：纯浮层，仅滚动时浮现，松手后淡出，不挤压相册网格内容。
+        LazyGridFastScroller(
+            state = gridState,
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+        )
+    }
     }
 
     if (creating) {

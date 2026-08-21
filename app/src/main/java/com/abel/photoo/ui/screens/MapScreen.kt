@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,9 +24,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -76,6 +79,8 @@ import com.abel.photoo.model.PhotoItem
 import com.abel.photoo.model.TimelineGrouping
 import com.abel.photoo.ui.PhotoOViewModel
 import com.abel.photoo.ui.components.ConfirmDialog
+import com.abel.photoo.ui.components.LazyGridFastScroller
+import com.abel.photoo.ui.components.LazyListFastScroller
 import com.abel.photoo.ui.components.EmptyState
 import com.abel.photoo.ui.components.timelineSections
 import com.abel.photoo.ui.util.Format
@@ -243,15 +248,20 @@ fun MapScreen(
             }
         }
 
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(
-                start = 14.dp,
-                end = 14.dp,
-                bottom = contentPadding.calculateBottomPadding() + 28.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        // 主列表区：右侧浮层手柄所在的 Box，weight 占满剩余空间。
+        // 手柄是纯 overlay，不挤压列表内容，仅滚动/拖拽时浮现，松手约 1.2s 后淡出。
+        val listState = rememberLazyListState()
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 14.dp,
+                    end = 14.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 28.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
 
         if (clusters.isNotEmpty()) {
             item("plot") {
@@ -333,7 +343,13 @@ fun MapScreen(
                 }
             }
         }
-    }
+            }                               // 关闭 LazyColumn（内容 lambda）
+            // 右侧快速滚动手柄（纯浮层，不挤压内容）：滚动时浮现、松手淡出。
+            LazyListFastScroller(
+                state = listState,
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
+        }
     }
 }
 
@@ -684,6 +700,7 @@ fun MapClusterDetailScreen(
         else photos.sortedBy { it.dateTaken }
     }
     val sections = remember(ordered, grouping) { Format.buildSections(ordered, grouping) }
+    val gridState = rememberLazyGridState()
     val pickedBytes = remember(picks, photos) {
         photos.filter { it.id in picks }.sumOf { it.size }
     }
@@ -715,6 +732,7 @@ fun MapClusterDetailScreen(
     ) { inner ->
         Box(Modifier.fillMaxSize()) {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Fixed(settings.gridColumns),
                 contentPadding = PaddingValues(
                     start = 10.dp,
@@ -785,6 +803,11 @@ fun MapClusterDetailScreen(
                         .padding(start = 14.dp, end = 14.dp, bottom = 16.dp),
                 )
             }
+            // 右侧快速滚动手柄（纯浮层，不挤压内容）：滚动时浮现、松手淡出。
+            LazyGridFastScroller(
+                state = gridState,
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 

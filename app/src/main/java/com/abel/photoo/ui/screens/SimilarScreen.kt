@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,6 +71,7 @@ import androidx.compose.runtime.LaunchedEffect
 import coil3.compose.AsyncImage
 import com.abel.photoo.model.KeepStrategy
 import com.abel.photoo.model.PhotoItem
+import com.abel.photoo.ui.components.LazyListFastScroller
 import com.abel.photoo.model.ScanState
 import com.abel.photoo.model.SimilarGroup
 import com.abel.photoo.model.SimilarityLevel
@@ -116,9 +119,11 @@ fun SimilarScreen(
     val pickedBytes = remember(picks, groups) {
         groups.flatMap { it.items }.filter { it.id in picks }.sumOf { it.size }
     }
+    val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
+            state = listState,
             contentPadding = PaddingValues(
                 start = 14.dp,
                 end = 14.dp,
@@ -221,6 +226,12 @@ fun SimilarScreen(
                     ),
             )
         }
+
+        // 右侧快速滚动拖动手柄：纯浮层，仅滚动时浮现，松手后淡出，不挤压相似列表内容。
+        LazyListFastScroller(
+            state = listState,
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+        )
     }
 
     if (confirmDelete) {
